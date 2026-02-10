@@ -1,0 +1,58 @@
+server:
+  port: 8080
+  read_timeout: 15s
+  write_timeout: 15s
+  shutdown_timeout: 5s
+
+logging:
+  output: "stdout"
+
+metrics:
+  enabled: true
+  path: "/metrics"
+
+rate_limit:
+  requests_per_second: 50
+  burst_size: 20
+
+auth:
+  enabled: true
+  jwt_secret: "${JWT_SECRET}"
+  issuer: "https://auth.example.com"
+  audience: "api-gateway"
+  scopes: ["read", "write"]
+
+admin:
+  enabled: true
+  ip_allowlist: ["0.0.0.0/0"]
+
+circuit_breaker:
+  window_size: 5
+  failure_threshold: 0.6
+  reset_timeout: 5s
+  half_open_max: 1
+
+routes:
+  - path_prefix: "/api/users"
+    backend: "http://users-service:3001"
+    strip_prefix: true
+    methods: ["GET", "POST", "PUT", "DELETE"]
+    auth_required: true
+    timeout_ms: 5000
+    retry_attempts: 2
+
+  - path_prefix: "/api/analytics"
+    backend: "http://analytics-service:3002"
+    strip_prefix: true
+    methods: ["GET", "POST"]
+    auth_required: true
+    timeout_ms: 10000
+    headers:
+      X-Source: "gateway"
+
+  - path_prefix: "/public"
+    backend: "http://users-service:3001"
+    strip_prefix: true
+    methods: ["GET"]
+    auth_required: false
+    timeout_ms: 5000

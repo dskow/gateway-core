@@ -270,34 +270,47 @@ routes:
 
 ---
 
-## Phase 5 — Testing & CI/CD (PLANNED)
+## Phase 5 — Testing & CI/CD (COMPLETE)
 
-Raise test quality and automate the release pipeline.
+Raised test quality and automated the release pipeline with integration tests, fuzz tests, load tests, and GitHub Actions CI/CD.
 
 ### 1. Integration Test Suite
 
-- Docker Compose-based integration tests that exercise the full stack
-- Test scenarios: auth flows, rate limiting under load, retry behavior, circuit breaker trips
-- Run in CI on every PR
+**Solution:** Docker Compose-based integration tests in `tests/integration/` using `//go:build integration` tag. `TestMain` manages the full lifecycle: writes `.env`, runs `docker compose up --build`, polls `/health` until ready, executes tests, then tears down. Tests exercise the real gateway binary over HTTP against echoserver backends. A dedicated `configs/integration-gateway.yaml` provides deterministic settings (lower rate limits, small circuit breaker window) for reliable test outcomes.
+
+**Test Scenarios (~20 tests):** Health/readiness endpoints, JWT auth flows (valid/expired/missing/wrong-scope/garbage), routing (404/405/path boundary/prefix stripping/header injection), rate limiting burst exhaustion, retry behavior (502 retries), circuit breaker trips (admin state inspection + 503 on open), metrics endpoint, admin API (routes/config/limiters), security headers, request ID generation/preservation/uniqueness, and error response format consistency.
+
+**Files:** `tests/integration/integration_test.go`, `tests/integration/helpers_test.go`, `tests/integration/docker-compose.integration.yaml`, `configs/integration-gateway.yaml`
 
 ### 2. Load Testing
 
-- k6 or vegeta load test scripts in `tests/load/`
-- Baseline performance benchmarks with documented results
-- Regression detection: fail CI if p99 latency exceeds threshold
+**Solution:** k6-based load test scripts in `tests/load/`. Baseline test runs two scenarios concurrently: public traffic (200 rps) and authenticated traffic (100 rps) for 30 seconds. CI-enforced thresholds: p99 < 500ms, error rate < 1%. Stress test ramps from 50 to 500 VUs to find breaking points. A Go token generator (`gen-token.go`) creates JWTs for load testing without external dependencies.
+
+**Files:** `tests/load/k6-baseline.js`, `tests/load/k6-stress.js`, `tests/load/gen-token.go`, `tests/load/results/.gitkeep`
 
 ### 3. Fuzz Testing
 
-- Fuzz config parsing (`go test -fuzz`)
-- Fuzz path matching logic
-- Fuzz JWT token validation
+**Solution:** Native Go `testing.F` fuzz tests placed alongside the packages they test. Three fuzz targets:
+
+- **`FuzzLoadFromBytes`** (`internal/config/fuzz_test.go`) — Feeds random YAML to config parser, verifies no panics, checks post-parse invariants (port range, positive RPS).
+- **`FuzzMatchesPrefix`** (`internal/routing/fuzz_test.go`) — Feeds random (path, prefix) pairs, verifies boundary enforcement invariant holds on all matches.
+- **`FuzzAuthMiddleware`** (`internal/auth/fuzz_test.go`) — Feeds random Authorization headers through real middleware, verifies no panics and only valid HTTP status codes (200/401/403).
+
+**Files:** `internal/config/fuzz_test.go`, `internal/routing/fuzz_test.go`, `internal/auth/fuzz_test.go`
 
 ### 4. CI Pipeline
 
-- GitHub Actions workflow: lint → build → unit test → integration test → Docker build
-- Auto-publish Docker image on tag
-- Dependabot for dependency updates
-- SBOM generation for supply chain security
+**Solution:** GitHub Actions CI pipeline (`.github/workflows/ci.yml`) with six jobs in dependency order: lint (`go vet` + `staticcheck`) → build (compile binaries) + unit-test (`go test -race -cover`, parallel) → fuzz (matrix of 3 targets, 30s each) → integration-test (docker compose stack) → docker-build (verify image builds). Release pipeline (`.github/workflows/release.yml`) triggers on `v*` tags: builds and pushes to GitHub Container Registry (`ghcr.io`), generates SBOM via `anchore/sbom-action` (SPDX format). Dependabot (`.github/dependabot.yml`) configured for weekly updates of Go modules, Docker base images, and GitHub Actions.
+
+**Files:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.github/dependabot.yml`
+
+### Makefile Additions
+
+```
+make test-integration  # Start stack, run integration tests, teardown
+make test-fuzz         # Run all 3 fuzz targets for 30s each
+make test-load         # Generate JWT, run k6 baseline
+```
 
 ---
 
@@ -309,6 +322,6 @@ Raise test quality and automate the release pipeline.
 | 2 | Observability & Metrics | **Complete** | `prometheus/client_golang`, `fsnotify/fsnotify` |
 | 3 | Resilience & Reliability | **Complete** | Phase 2 (metrics for circuit breaker) |
 | 4 | Operational Hardening | **Complete** | Phase 1 (TLS needs security headers) |
-| 5 | Testing & CI/CD | Planned | Phase 2-3 (integration tests need metrics + circuit breaker) |
+| 5 | Testing & CI/CD | **Complete** | Phase 2-3 (integration tests need metrics + circuit breaker) |
 
 Phases 2 and 4 can run in parallel. Phase 3 benefits from Phase 2 metrics. Phase 5 should come last since it tests features from all prior phases.

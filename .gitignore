@@ -31,3 +31,9 @@ go.work.sum
 # .idea/
 # .vscode/
 .demo_runs/**
+
+# Load test results
+tests/load/results/*.json
+
+# Integration test temp files
+.env.integration
