@@ -40,7 +40,7 @@ func TestRouter_RouteMatching(t *testing.T) {
 	}
 
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestRouter_NoMatchingRoute(t *testing.T) {
 		{PathPrefix: "/api", Backend: "http://localhost:9999", TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestRouter_MethodNotAllowed(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, Methods: []string{"GET"}, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRouter_PrefixStripping(t *testing.T) {
 		{PathPrefix: "/api/users", Backend: backend.URL, StripPrefix: true, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestRouter_PrefixStripping_RootPath(t *testing.T) {
 		{PathPrefix: "/api/users", Backend: backend.URL, StripPrefix: true, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRouter_HeaderInjection(t *testing.T) {
 		},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestRouter_XForwardedFor(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestRouter_GatewayLatencyHeader(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestRouter_InvalidBackendURL(t *testing.T) {
 		{PathPrefix: "/api", Backend: "://bad-url", TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	_, err := New(routes, logger)
+	_, err := New(routes, nil, logger)
 	if err == nil {
 		t.Error("expected error for invalid backend URL")
 	}
@@ -259,7 +259,7 @@ func TestRouter_PathBoundaryEnforcement(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, logger)
+	router, err := New(routes, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

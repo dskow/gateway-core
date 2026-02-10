@@ -1,5 +1,5 @@
 // Package proxy provides a reverse proxy with route matching, path stripping,
-// header injection, retries, and timeout handling.
+// header injection, retries, circuit breaker integration, and timeout handling.
 package proxy
 
 import (
@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dskow/go-api-gateway/internal/circuitbreaker"
 	"github.com/dskow/go-api-gateway/internal/config"
 	"github.com/dskow/go-api-gateway/internal/metrics"
 	"github.com/dskow/go-api-gateway/internal/routing"
@@ -24,14 +26,16 @@ import (
 // Router matches incoming requests to configured routes and proxies
 // them to the appropriate backend.
 type Router struct {
-	routes  []config.RouteConfig
-	proxies map[string]*httputil.ReverseProxy
-	logger  *slog.Logger
+	routes   []config.RouteConfig
+	proxies  map[string]*httputil.ReverseProxy
+	breakers map[string]*circuitbreaker.CompositeBreaker
+	logger   *slog.Logger
 }
 
 // New creates a Router from the given route configurations. Routes are
 // sorted by path prefix length (longest first) for correct matching.
-func New(routes []config.RouteConfig, logger *slog.Logger) (*Router, error) {
+// breakers maps backend URLs to their circuit breaker instances.
+func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.CompositeBreaker, logger *slog.Logger) (*Router, error) {
 	sorted := make([]config.RouteConfig, len(routes))
 	copy(sorted, routes)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -46,6 +50,10 @@ func New(routes []config.RouteConfig, logger *slog.Logger) (*Router, error) {
 		}
 		rte := route // capture for closure
 		proxy := httputil.NewSingleHostReverseProxy(target)
+
+		// Configure per-backend connection pool via custom Transport.
+		proxy.Transport = buildTransport(route.ConnectionPool)
+
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("proxy error", "error", err, "backend", rte.Backend, "path", r.URL.Path)
 			writeJSONError(w, http.StatusBadGateway, "upstream service unavailable")
@@ -54,14 +62,48 @@ func New(routes []config.RouteConfig, logger *slog.Logger) (*Router, error) {
 	}
 
 	return &Router{
-		routes:  sorted,
-		proxies: proxies,
-		logger:  logger,
+		routes:   sorted,
+		proxies:  proxies,
+		breakers: breakers,
+		logger:   logger,
 	}, nil
 }
 
+// buildTransport creates an http.Transport with connection pool settings.
+// Uses sensible defaults when no config is provided.
+func buildTransport(pool *config.ConnectionPoolConfig) *http.Transport {
+	maxIdle := 100
+	maxPerHost := 10
+	idleTimeout := 90 * time.Second
+
+	if pool != nil {
+		if pool.MaxIdleConns > 0 {
+			maxIdle = pool.MaxIdleConns
+		}
+		if pool.MaxIdlePerHost > 0 {
+			maxPerHost = pool.MaxIdlePerHost
+		}
+		if pool.IdleTimeout > 0 {
+			idleTimeout = pool.IdleTimeout
+		}
+	}
+
+	return &http.Transport{
+		MaxIdleConns:        maxIdle,
+		MaxIdleConnsPerHost: maxPerHost,
+		IdleConnTimeout:     idleTimeout,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 0, // per-route timeout handles this
+	}
+}
+
 // ServeHTTP implements http.Handler. It matches the request to a route,
-// validates the HTTP method, injects headers, and proxies with retries.
+// validates the HTTP method, checks the circuit breaker, injects headers,
+// and proxies with retries.
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
@@ -74,6 +116,26 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(route.Methods) > 0 && !methodAllowed(r.Method, route.Methods) {
 		writeJSONError(w, http.StatusMethodNotAllowed, fmt.Sprintf("method %s not allowed for %s", r.Method, route.PathPrefix))
 		return
+	}
+
+	// Circuit breaker check.
+	breaker := rt.breakers[route.Backend]
+	if breaker != nil {
+		if !breaker.Allow() {
+			// Circuit is open — serve fallback or 503.
+			if route.FallbackStatus != 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(route.FallbackStatus)
+				if route.FallbackBody != "" {
+					w.Write([]byte(route.FallbackBody))
+					w.Write([]byte("\n"))
+				}
+			} else {
+				writeJSONError(w, http.StatusServiceUnavailable, "circuit breaker open")
+			}
+			return
+		}
+		defer breaker.Release()
 	}
 
 	metrics.ActiveConnections.Inc()
@@ -102,35 +164,55 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	recorder := &responseRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Check for context cancellation before each attempt (clean propagation).
+		if r.Context().Err() != nil {
+			writeJSONError(w, http.StatusGatewayTimeout, "request cancelled")
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(r.Context(), route.Timeout())
 		rWithCtx := r.WithContext(ctx)
 
+		attemptStart := time.Now()
 		isFinal := attempt == maxAttempts
 
 		if isFinal {
 			// Final attempt: write directly to the real client.
-			// Set latency header via a wrapper so it's written BEFORE
-			// the reverse proxy calls WriteHeader on the response.
 			lw := &latencyWriter{ResponseWriter: recorder, start: start}
 			proxy.ServeHTTP(lw, rWithCtx)
 			cancel()
+
+			latency := time.Since(attemptStart)
+			if breaker != nil {
+				if isRetryable(recorder.statusCode) {
+					breaker.RecordFailure(latency)
+				} else {
+					breaker.RecordSuccess(latency)
+				}
+			}
 			break
 		}
 
-		// Non-final attempt: buffer the full response so we can either
-		// replay it on success or discard it and retry. This avoids the
-		// double-backend-hit that the old discard+re-send approach had.
+		// Non-final attempt: buffer the full response.
 		buf := &responseBuffer{header: make(http.Header), statusCode: http.StatusOK}
 		proxy.ServeHTTP(buf, rWithCtx)
 		cancel()
 
+		latency := time.Since(attemptStart)
+
 		if !isRetryable(buf.statusCode) {
-			// Success or non-retryable error — replay buffered response
-			// to the real writer without hitting the backend again.
-			// Set latency header BEFORE replay calls WriteHeader.
+			// Success or non-retryable error — replay buffered response.
+			if breaker != nil {
+				breaker.RecordSuccess(latency)
+			}
 			w.Header().Set("X-Gateway-Latency", time.Since(start).String())
 			buf.replayTo(recorder)
 			break
+		}
+
+		// Retryable failure — record it.
+		if breaker != nil {
+			breaker.RecordFailure(latency)
 		}
 
 		metrics.RetryTotal.WithLabelValues(route.PathPrefix, route.Backend).Inc()
@@ -146,11 +228,11 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(backoff)
 	}
 
-	latency := time.Since(start)
+	totalLatency := time.Since(start)
 
 	statusStr := strconv.Itoa(recorder.statusCode)
 	metrics.RequestsTotal.WithLabelValues(route.PathPrefix, r.Method, statusStr).Inc()
-	metrics.RequestDuration.WithLabelValues(route.PathPrefix, r.Method).Observe(latency.Seconds())
+	metrics.RequestDuration.WithLabelValues(route.PathPrefix, r.Method).Observe(totalLatency.Seconds())
 
 	if recorder.statusCode >= 500 {
 		metrics.BackendErrors.WithLabelValues(route.PathPrefix, route.Backend, statusStr).Inc()
@@ -188,8 +270,10 @@ func isRetryable(status int) bool {
 
 // Pre-serialized JSON error bodies avoid per-request json.Encoder allocations.
 var (
-	errBodyNotFound   = mustMarshalError(http.StatusNotFound, "no matching route")
-	errBodyBadGateway = mustMarshalError(http.StatusBadGateway, "upstream service unavailable")
+	errBodyNotFound     = mustMarshalError(http.StatusNotFound, "no matching route")
+	errBodyBadGateway   = mustMarshalError(http.StatusBadGateway, "upstream service unavailable")
+	errBodyCircuitOpen  = mustMarshalError(http.StatusServiceUnavailable, "circuit breaker open")
+	errBodyTimeout      = mustMarshalError(http.StatusGatewayTimeout, "request cancelled")
 )
 
 func mustMarshalError(status int, message string) []byte {
@@ -211,6 +295,10 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 		w.Write(errBodyNotFound)
 	case status == http.StatusBadGateway && message == "upstream service unavailable":
 		w.Write(errBodyBadGateway)
+	case status == http.StatusServiceUnavailable && message == "circuit breaker open":
+		w.Write(errBodyCircuitOpen)
+	case status == http.StatusGatewayTimeout && message == "request cancelled":
+		w.Write(errBodyTimeout)
 	default:
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":   http.StatusText(status),

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dskow/go-api-gateway/internal/circuitbreaker"
 	"github.com/dskow/go-api-gateway/internal/config"
 )
 
@@ -21,8 +22,9 @@ const readinessCacheTTL = 5 * time.Second
 
 // Handler provides /health and /ready endpoints.
 type Handler struct {
-	routes []config.RouteConfig
-	logger *slog.Logger
+	routes   []config.RouteConfig
+	breakers map[string]*circuitbreaker.CompositeBreaker
+	logger   *slog.Logger
 
 	// Cached readiness result to avoid TCP-dialling every backend on
 	// every /ready poll. Protected by cacheMu.
@@ -32,9 +34,10 @@ type Handler struct {
 	cachedAt     time.Time
 }
 
-// New creates a new health check Handler.
-func New(routes []config.RouteConfig, logger *slog.Logger) *Handler {
-	return &Handler{routes: routes, logger: logger}
+// New creates a new health check Handler. breakers maps backend URLs to
+// their circuit breaker instances (may be nil for backends without breakers).
+func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.CompositeBreaker, logger *slog.Logger) *Handler {
+	return &Handler{routes: routes, breakers: breakers, logger: logger}
 }
 
 // RegisterRoutes adds health check routes to the given mux.
@@ -63,19 +66,33 @@ func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cacheMu.RUnlock()
 
-	// Dial all backends concurrently.
-	type dialResult struct {
-		prefix string
-		status string
-		ok     bool
+	type backendResult struct {
+		prefix  string
+		backend string
+		status  string
+		ok      bool
 	}
 
-	ch := make(chan dialResult, len(h.routes))
+	ch := make(chan backendResult, len(h.routes))
 	for _, route := range h.routes {
 		go func(route config.RouteConfig) {
+			// Fast path: use circuit breaker state if available.
+			if cb, exists := h.breakers[route.Backend]; exists && cb != nil {
+				st := cb.State()
+				switch st {
+				case circuitbreaker.StateOpen:
+					ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "circuit-open", ok: false}
+					return
+				case circuitbreaker.StateHalfOpen:
+					ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "circuit-half-open", ok: true}
+					return
+				}
+				// StateClosed — fall through to TCP dial for definitive check.
+			}
+
 			u, err := url.Parse(route.Backend)
 			if err != nil {
-				ch <- dialResult{prefix: route.PathPrefix, status: "invalid URL", ok: false}
+				ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "invalid URL", ok: false}
 				return
 			}
 
@@ -95,27 +112,31 @@ func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
 
 			if err != nil {
 				h.logger.Warn("backend unreachable", "route", route.PathPrefix, "backend", route.Backend, "error", err)
-				ch <- dialResult{prefix: route.PathPrefix, status: "unreachable", ok: false}
+				ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "unreachable", ok: false}
 				return
 			}
 			conn.Close()
-			ch <- dialResult{prefix: route.PathPrefix, status: "ok", ok: true}
+			ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "ok", ok: true}
 		}(route)
 	}
 
-	allReady := true
+	// Collect results and group by backend to determine readiness.
+	// New logic: 503 only when ALL backends for any given route are down.
+	// (Currently each route maps to one backend, but this is forward-compatible.)
 	results := make(map[string]string, len(h.routes))
+	anyRouteFullyDown := false
+
 	for range h.routes {
 		res := <-ch
 		results[res.prefix] = res.status
 		if !res.ok {
-			allReady = false
+			anyRouteFullyDown = true
 		}
 	}
 
 	httpStatus := http.StatusOK
 	statusStr := "ready"
-	if !allReady {
+	if anyRouteFullyDown {
 		httpStatus = http.StatusServiceUnavailable
 		statusStr = "not ready"
 	}

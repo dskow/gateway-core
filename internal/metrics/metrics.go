@@ -73,6 +73,43 @@ var (
 		},
 		[]string{"route", "backend"},
 	)
+
+	// CircuitBreakerStateChanges counts state transitions by backend and direction.
+	CircuitBreakerStateChanges = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_circuit_breaker_state_changes_total",
+			Help: "Total circuit breaker state transitions",
+		},
+		[]string{"backend", "from", "to"},
+	)
+
+	// CircuitBreakerState reports the current state of each backend's circuit breaker.
+	// 0=closed, 1=open, 2=half-open.
+	CircuitBreakerState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gateway_circuit_breaker_state",
+			Help: "Current circuit breaker state (0=closed, 1=open, 2=half-open)",
+		},
+		[]string{"backend"},
+	)
+
+	// BulkheadRejections counts requests rejected due to concurrency limits.
+	BulkheadRejections = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_bulkhead_rejections_total",
+			Help: "Total requests rejected by bulkhead concurrency limiter",
+		},
+		[]string{"backend"},
+	)
+
+	// BulkheadInFlight tracks the number of in-flight requests per backend bulkhead.
+	BulkheadInFlight = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gateway_bulkhead_in_flight",
+			Help: "Current number of in-flight requests per backend bulkhead",
+		},
+		[]string{"backend"},
+	)
 )
 
 // Init registers all metric collectors with the default Prometheus registry.
@@ -86,6 +123,10 @@ func Init() {
 		AuthFailures,
 		BackendErrors,
 		RetryTotal,
+		CircuitBreakerStateChanges,
+		CircuitBreakerState,
+		BulkheadRejections,
+		BulkheadInFlight,
 	)
 }
 

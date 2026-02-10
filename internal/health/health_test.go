@@ -11,7 +11,7 @@ import (
 )
 
 func TestLiveness_AlwaysReturns200(t *testing.T) {
-	h := New(nil, slog.Default())
+	h := New(nil, nil, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -33,7 +33,7 @@ func TestLiveness_AlwaysReturns200(t *testing.T) {
 }
 
 func TestLiveness_JSONContentType(t *testing.T) {
-	h := New(nil, slog.Default())
+	h := New(nil, nil, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -57,7 +57,7 @@ func TestReadiness_AllBackendsReachable(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL},
 	}
 
-	h := New(routes, slog.Default())
+	h := New(routes, nil, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -83,7 +83,7 @@ func TestReadiness_BackendUnreachable(t *testing.T) {
 		{PathPrefix: "/api", Backend: "http://localhost:19999"}, // nothing listening
 	}
 
-	h := New(routes, slog.Default())
+	h := New(routes, nil, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -105,7 +105,7 @@ func TestReadiness_BackendUnreachable(t *testing.T) {
 }
 
 func TestReadiness_JSONResponse(t *testing.T) {
-	h := New(nil, slog.Default())
+	h := New(nil, nil, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 

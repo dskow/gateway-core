@@ -117,33 +117,83 @@ metrics:
 
 ---
 
-## Phase 3 — Resilience & Reliability (PLANNED)
+## Phase 3 — Resilience & Reliability (COMPLETE)
 
-Harden the gateway against backend failures and load spikes.
+Hardened the gateway against backend failures and load spikes with four composable circuit breaker types, global request deadlines, graceful degradation, and per-backend connection pooling.
 
-### 1. Circuit Breaker
+### 1. Circuit Breaker Package
 
-- Per-backend circuit breaker (closed → open → half-open state machine)
-- Configurable failure threshold, timeout, and half-open probe count
-- Return 503 with structured error when circuit is open
-- Metrics integration: circuit state changes, trip counts
+Four composable circuit breaker types in `internal/circuitbreaker/`, composed via `CompositeBreaker`:
+
+**a) Failure-Rate Breaker** (`failure_rate.go`) — Sliding-window failure-rate tracking. Opens when failure ratio exceeds configurable threshold over the window. Three-state machine: Closed → Open → Half-Open → Closed. Ring buffer for O(1) window management.
+
+**b) Timeout Breaker** (`timeout.go`) — Wraps inner breaker and treats slow responses (above `slow_threshold`) as failures. No goroutine leaks — latency measured by caller.
+
+**c) Bulkhead Breaker** (`bulkhead.go`) — Limits concurrent in-flight requests per backend via buffered channel semaphore. Non-blocking rejection at limit. Prevents goroutine pileups and resource starvation.
+
+**d) Adaptive Breaker** (`adaptive.go`) — Dynamically adjusts failure-rate threshold based on EWMA latency. Tightens threshold when latency rises above ceiling, relaxes when it drops. No extra goroutines.
+
+**Composition** (`composite.go`): Factory builds layered stack based on config: FailureRate → Adaptive → Timeout → Bulkhead. Proxy interacts only with `CompositeBreaker`.
+
+**Files:** `internal/circuitbreaker/breaker.go`, `failure_rate.go`, `timeout.go`, `bulkhead.go`, `adaptive.go`, `composite.go`
 
 ### 2. Request Timeout Improvements
 
-- Add per-route read/write timeout overrides (currently only connect+response timeout)
-- Add global request deadline that covers the entire middleware chain
-- Ensure context cancellation propagates cleanly through retries
+**Solution:** Added `Deadline` middleware (`internal/middleware/deadline.go`) that wraps the entire request context with `context.WithTimeout`. Returns 504 when deadline fires. Configurable via `server.global_timeout_ms` (0 = disabled). Context cancellation checked between retry attempts in proxy for clean propagation.
+
+**Files:** `internal/middleware/deadline.go`, `internal/proxy/proxy.go`, `internal/config/config.go`
 
 ### 3. Graceful Degradation
 
-- Health endpoint reports per-backend status (not just all-or-nothing)
-- Readiness probe fails only when all backends for a route are down
-- Optional fallback responses for non-critical routes
+**Solution:** Health endpoint uses circuit breaker state as fast path — skips TCP dial when breaker state is known. Reports per-backend status with new strings: `"ok"`, `"circuit-open"`, `"circuit-half-open"`, `"unreachable"`. Optional per-route fallback responses (configurable `fallback_status` and `fallback_body`) served when circuit is open.
+
+**Files:** `internal/health/health.go`, `internal/proxy/proxy.go`, `internal/config/config.go`
 
 ### 4. Connection Pooling
 
-- Configure `Transport.MaxIdleConns`, `MaxIdleConnsPerHost`, `IdleConnTimeout` per backend
-- Expose connection pool metrics via Prometheus
+**Solution:** Per-backend `http.Transport` with configurable `MaxIdleConns`, `MaxIdleConnsPerHost`, `IdleConnTimeout` via route-level `connection_pool` config. Sensible defaults (100, 10, 90s). Custom dialer with 10s connect timeout and 30s keepalive.
+
+**Files:** `internal/proxy/proxy.go`, `internal/config/config.go`
+
+### Middleware Chain (post-Phase 3)
+
+```
+Recovery → RequestID → Deadline → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
+```
+
+### Metrics Added
+
+- `gateway_circuit_breaker_state_changes_total` (counter: backend/from/to)
+- `gateway_circuit_breaker_state` (gauge: backend, 0=closed/1=open/2=half-open)
+- `gateway_bulkhead_rejections_total` (counter: backend)
+- `gateway_bulkhead_in_flight` (gauge: backend)
+
+### Config Additions (backward-compatible)
+
+```yaml
+server:
+  global_timeout_ms: 60000    # optional, default: 0 (disabled)
+
+circuit_breaker:
+  window_size: 10             # optional, default: 10
+  failure_threshold: 0.5      # optional, default: 0.5
+  reset_timeout: 30s          # optional, default: 30s
+  half_open_max: 2            # optional, default: 2
+  slow_threshold: 5s          # optional, default: 0 (disabled)
+  max_concurrent: 100         # optional, default: 0 (disabled)
+  adaptive: false             # optional, default: false
+  latency_ceiling: 2s         # optional, default: 2s (when adaptive)
+  min_threshold: 0.2          # optional, default: 0.2 (when adaptive)
+
+routes:
+  - path_prefix: "/api/users"
+    connection_pool:           # optional per-route
+      max_idle_conns: 100
+      max_idle_per_host: 10
+      idle_timeout: 90s
+    fallback_status: 200       # optional, served when circuit open
+    fallback_body: '{"status":"degraded"}'
+```
 
 ---
 
@@ -215,7 +265,7 @@ Raise test quality and automate the release pipeline.
 |-------|-------|--------|-------------|
 | 1 | Security Hardening | **Complete** | None |
 | 2 | Observability & Metrics | **Complete** | `prometheus/client_golang`, `fsnotify/fsnotify` |
-| 3 | Resilience & Reliability | Planned | Phase 2 (metrics for circuit breaker) |
+| 3 | Resilience & Reliability | **Complete** | Phase 2 (metrics for circuit breaker) |
 | 4 | Operational Hardening | Planned | Phase 1 (TLS needs security headers) |
 | 5 | Testing & CI/CD | Planned | Phase 2-3 (integration tests need metrics + circuit breaker) |
 

@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/dskow/go-api-gateway/internal/auth"
+	"github.com/dskow/go-api-gateway/internal/circuitbreaker"
 	"github.com/dskow/go-api-gateway/internal/config"
 	"github.com/dskow/go-api-gateway/internal/health"
 	"github.com/dskow/go-api-gateway/internal/metrics"
@@ -47,6 +48,7 @@ func main() {
 		"metrics_path", cfg.Metrics.Path,
 		"trusted_proxies", len(cfg.Server.TrustedProxies),
 		"max_body_bytes", cfg.Server.MaxBodyBytes,
+		"global_timeout_ms", cfg.Server.GlobalTimeoutMs,
 	)
 
 	// Initialize Prometheus metrics
@@ -54,8 +56,28 @@ func main() {
 		metrics.Init()
 	}
 
+	// Create circuit breakers (one per unique backend URL).
+	cbCfg := circuitbreaker.Config{
+		WindowSize:       cfg.CircuitBreaker.WindowSize,
+		FailureThreshold: cfg.CircuitBreaker.FailureThreshold,
+		ResetTimeout:     cfg.CircuitBreaker.ResetTimeout,
+		HalfOpenMax:      cfg.CircuitBreaker.HalfOpenMax,
+		SlowThreshold:    cfg.CircuitBreaker.SlowThreshold,
+		MaxConcurrent:    cfg.CircuitBreaker.MaxConcurrent,
+		Adaptive:         cfg.CircuitBreaker.Adaptive,
+		LatencyCeiling:   cfg.CircuitBreaker.LatencyCeiling,
+		MinThreshold:     cfg.CircuitBreaker.MinThreshold,
+	}
+	breakers := make(map[string]*circuitbreaker.CompositeBreaker)
+	for _, route := range cfg.Routes {
+		if _, exists := breakers[route.Backend]; !exists {
+			breakers[route.Backend] = circuitbreaker.NewComposite(route.Backend, cbCfg, logger)
+			logger.Info("circuit breaker created", "backend", route.Backend)
+		}
+	}
+
 	// Build the proxy router
-	router, err := proxy.New(cfg.Routes, logger)
+	router, err := proxy.New(cfg.Routes, breakers, logger)
 	if err != nil {
 		logger.Error("failed to create proxy router", "error", err)
 		os.Exit(1)
@@ -75,7 +97,7 @@ func main() {
 	}
 
 	// Assemble middleware stack:
-	// Recovery → RequestID → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
+	// Recovery → RequestID → Deadline → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
 	var handler http.Handler = router
 	handler = auth.Middleware(cfg.Auth, routeRequiresAuth, logger)(handler)
 	handler = limiter.Middleware()(handler)
@@ -83,13 +105,14 @@ func main() {
 	handler = middleware.CORS(middleware.DefaultCORSConfig())(handler)
 	handler = middleware.Logging(logger)(handler)
 	handler = middleware.SecurityHeaders()(handler)
+	handler = middleware.Deadline(cfg.Server.GlobalTimeout())(handler)
 	handler = middleware.RequestID(handler)
 	handler = middleware.Recovery(logger)(handler)
 
 	// Register health check and metrics routes on a separate mux,
 	// then combine with the main handler
 	mux := http.NewServeMux()
-	healthHandler := health.New(cfg.Routes, logger)
+	healthHandler := health.New(cfg.Routes, breakers, logger)
 	healthHandler.RegisterRoutes(mux)
 
 	metricsPath := cfg.Metrics.Path
@@ -117,6 +140,23 @@ func main() {
 	// Register reload callbacks for components that support hot-reload
 	reloader.OnReload(func(newCfg *config.Config) {
 		limiter.UpdateConfig(newCfg.RateLimit, newCfg.Routes)
+
+		// Update circuit breaker configs.
+		newCbCfg := circuitbreaker.Config{
+			WindowSize:       newCfg.CircuitBreaker.WindowSize,
+			FailureThreshold: newCfg.CircuitBreaker.FailureThreshold,
+			ResetTimeout:     newCfg.CircuitBreaker.ResetTimeout,
+			HalfOpenMax:      newCfg.CircuitBreaker.HalfOpenMax,
+			SlowThreshold:    newCfg.CircuitBreaker.SlowThreshold,
+			MaxConcurrent:    newCfg.CircuitBreaker.MaxConcurrent,
+			Adaptive:         newCfg.CircuitBreaker.Adaptive,
+			LatencyCeiling:   newCfg.CircuitBreaker.LatencyCeiling,
+			MinThreshold:     newCfg.CircuitBreaker.MinThreshold,
+		}
+		for backend, cb := range breakers {
+			cb.UpdateConfig(newCbCfg)
+			logger.Info("circuit breaker config updated", "backend", backend)
+		}
 	})
 
 	srv := &http.Server{
