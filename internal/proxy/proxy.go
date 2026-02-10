@@ -279,15 +279,6 @@ func (rt *Router) MatchRoute(path string) (config.RouteConfig, bool) {
 	return rt.matchRoute(path)
 }
 
-func methodAllowed(method string, allowed []string) bool {
-	for _, m := range allowed {
-		if strings.EqualFold(method, m) {
-			return true
-		}
-	}
-	return false
-}
-
 func isRetryable(status int) bool {
 	return status == http.StatusBadGateway ||
 		status == http.StatusServiceUnavailable ||

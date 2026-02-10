@@ -10,13 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// resetRegistry creates a fresh registry for test isolation.
-func resetRegistry(t *testing.T) {
-	t.Helper()
-	// Unregister and re-register to avoid "duplicate metrics collector" panics
-	// across tests. We use a new registry per test.
-}
-
 func TestInit_RegistersMetrics(t *testing.T) {
 	// Use a custom registry to avoid conflicts with other tests
 	reg := prometheus.NewRegistry()
