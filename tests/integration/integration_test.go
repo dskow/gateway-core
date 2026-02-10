@@ -204,9 +204,12 @@ func TestRateLimiting_BurstExhaustion(t *testing.T) {
 // --- Retry Behavior ---
 
 func TestRetryBehavior(t *testing.T) {
+	// Wait for rate limiter to refill after the burst exhaustion test.
+	time.Sleep(2 * time.Second)
+
 	// Request a 502 from echoserver via /__status/502 (prefix stripped).
 	// The gateway should retry (retry_attempts=2) and still return 502.
-	token := generateJWT("user-123", "read write", time.Hour)
+	token := generateJWT("retry-user", "read write", time.Hour)
 	resp, _, err := httpGet(gatewayURL+"/api/users/__status/502", authHeader(token))
 	if err != nil {
 		t.Fatal(err)
@@ -239,13 +242,15 @@ func TestCircuitBreaker_OpensOnFailures(t *testing.T) {
 	}
 	assertStatusCode(t, resp, 200)
 
-	var routes []map[string]interface{}
-	if err := json.Unmarshal(body, &routes); err != nil {
-		t.Fatalf("failed to parse admin/routes: %v", err)
+	var result struct {
+		Routes []map[string]interface{} `json:"routes"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("failed to parse admin/routes: %v\nbody: %s", err, string(body))
 	}
 
 	foundOpen := false
-	for _, r := range routes {
+	for _, r := range result.Routes {
 		prefix, _ := r["path_prefix"].(string)
 		state, _ := r["circuit_breaker_state"].(string)
 		if prefix == "/api/users" && state == "open" {
@@ -256,7 +261,7 @@ func TestCircuitBreaker_OpensOnFailures(t *testing.T) {
 
 	if !foundOpen {
 		t.Log("circuit breaker states:")
-		for _, r := range routes {
+		for _, r := range result.Routes {
 			t.Logf("  %s: %s", r["path_prefix"], r["circuit_breaker_state"])
 		}
 		t.Error("expected circuit breaker for /api/users to be open after failures")
@@ -295,11 +300,13 @@ func TestAdminRoutes(t *testing.T) {
 	}
 	assertStatusCode(t, resp, 200)
 
-	var routes []interface{}
-	if err := json.Unmarshal(body, &routes); err != nil {
-		t.Fatalf("expected JSON array from /admin/routes: %v", err)
+	var result struct {
+		Routes []map[string]interface{} `json:"routes"`
 	}
-	if len(routes) == 0 {
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("failed to parse /admin/routes response: %v", err)
+	}
+	if len(result.Routes) == 0 {
 		t.Error("expected at least one route in admin response")
 	}
 }

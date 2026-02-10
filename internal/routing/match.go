@@ -8,6 +8,9 @@ import "strings"
 // The path must either equal the prefix, the prefix must end with "/",
 // or the character after the prefix in path must be "/".
 func MatchesPrefix(path, prefix string) bool {
+	if prefix == "" {
+		return false
+	}
 	if !strings.HasPrefix(path, prefix) {
 		return false
 	}
