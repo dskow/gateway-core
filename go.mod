@@ -1,12 +1,12 @@
 module github.com/dskow/gateway-core
 
-go 1.22
+go 1.24.0
 
 require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/prometheus/client_golang v1.19.1
-	golang.org/x/time v0.5.0
+	golang.org/x/time v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
