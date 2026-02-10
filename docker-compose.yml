@@ -1,0 +1,45 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
+    volumes:
+      - ./configs/docker-gateway.yaml:/etc/gateway/gateway.yaml:ro
+    depends_on:
+      - users-service
+      - analytics-service
+
+  users-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["echoserver"]
+    command: ["-port", "3001", "-name", "users-service"]
+    expose:
+      - "3001"
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["echoserver"]
+    command: ["-port", "3002", "-name", "analytics-service"]
+    expose:
+      - "3002"
+
+  demo:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile
+    volumes:
+      - ./scripts:/scripts:ro
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
+    depends_on:
+      - gateway
+    working_dir: /scripts
+    command: ["python", "demo.py"]
