@@ -48,7 +48,7 @@ jobs:
         with:
           artifact-name: sbom-gateway-core.spdx.json
           output-file: sbom-gateway-core.spdx.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: sbom
           path: sbom-gateway-core.spdx.json
