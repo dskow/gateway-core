@@ -1,0 +1,10 @@
+services:
+  gateway:
+    environment:
+      - JWT_SECRET=integration-test-secret-key-32chars!!
+    volumes:
+      - ./configs/integration-gateway.yaml:/etc/gateway/gateway.yaml:ro
+
+  demo:
+    profiles:
+      - disabled

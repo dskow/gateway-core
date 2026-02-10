@@ -76,7 +76,7 @@ jobs:
       - name: Start services
         run: |
           echo "JWT_SECRET=integration-test-secret-key-32chars!!" > .env
-          docker compose -f docker-compose.yml -f tests/integration/docker-compose.integration.yaml up --build -d
+          docker compose -f docker-compose.yml -f docker-compose.integration.yaml up --build -d
 
       - name: Wait for gateway
         run: |
@@ -96,7 +96,7 @@ jobs:
 
       - name: Tear down
         if: always()
-        run: docker compose -f docker-compose.yml -f tests/integration/docker-compose.integration.yaml down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.integration.yaml down -v
 
   docker-build:
     runs-on: ubuntu-latest

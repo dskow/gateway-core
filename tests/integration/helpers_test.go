@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 	// Start docker-compose stack
 	up := exec.Command("docker", "compose",
 		"-f", "../../docker-compose.yml",
-		"-f", "docker-compose.integration.yaml",
+		"-f", "../../docker-compose.integration.yaml",
 		"up", "--build", "-d",
 	)
 	up.Dir = "."
@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 		// Print logs for debugging
 		logs := exec.Command("docker", "compose",
 			"-f", "../../docker-compose.yml",
-			"-f", "docker-compose.integration.yaml",
+			"-f", "../../docker-compose.integration.yaml",
 			"logs",
 		)
 		logs.Stdout = os.Stderr
@@ -71,7 +71,7 @@ func TestMain(m *testing.M) {
 func teardown() {
 	down := exec.Command("docker", "compose",
 		"-f", "../../docker-compose.yml",
-		"-f", "docker-compose.integration.yaml",
+		"-f", "../../docker-compose.integration.yaml",
 		"down", "-v",
 	)
 	down.Stdout = os.Stdout

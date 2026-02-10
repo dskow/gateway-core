@@ -29,14 +29,14 @@ docker-down:
 test-integration:
 	@echo "Starting integration test stack..."
 	@echo "JWT_SECRET=integration-test-secret-key-32chars!!" > .env
-	docker compose -f docker-compose.yml -f tests/integration/docker-compose.integration.yaml up --build -d
+	docker compose -f docker-compose.yml -f docker-compose.integration.yaml up --build -d
 	@echo "Waiting for gateway..."
 	@for i in $$(seq 1 60); do \
 		curl -sf http://localhost:8080/health > /dev/null 2>&1 && break; \
 		sleep 1; \
 	done
 	go test -tags integration -v -timeout 120s ./tests/integration/
-	docker compose -f docker-compose.yml -f tests/integration/docker-compose.integration.yaml down -v
+	docker compose -f docker-compose.yml -f docker-compose.integration.yaml down -v
 
 test-fuzz:
 	go test ./internal/config -fuzz=FuzzLoadFromBytes -fuzztime=30s
