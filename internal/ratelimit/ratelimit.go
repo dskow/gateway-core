@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dskow/gateway-core/internal/apierror"
 	"github.com/dskow/gateway-core/internal/config"
 	"github.com/dskow/gateway-core/internal/metrics"
 	"github.com/dskow/gateway-core/internal/routing"
@@ -44,8 +45,6 @@ type Limiter struct {
 	stopCh       chan struct{}
 }
 
-// Pre-serialized 429 JSON body avoids json.Encoder allocation per rejection.
-var errBodyTooManyRequests = []byte(`{"error":"Too Many Requests","message":"rate limit exceeded, retry later"}` + "\n")
 
 // New creates a new Limiter with the given global rate limit settings and
 // route-level overrides. It starts a background goroutine that cleans up
@@ -114,9 +113,7 @@ func (l *Limiter) Middleware() func(http.Handler) http.Handler {
 				metrics.RateLimitHits.WithLabelValues(routePrefix).Inc()
 				retryAfter := strconv.FormatFloat(1.0/float64(rateLimit), 'f', 0, 64)
 				w.Header().Set("Retry-After", retryAfter)
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				w.Write(errBodyTooManyRequests)
+				apierror.WriteJSON(w, r, http.StatusTooManyRequests, apierror.RateLimitExceeded, "rate limit exceeded, retry later")
 				return
 			}
 
@@ -248,4 +245,42 @@ func (l *Limiter) cleanup() {
 			return
 		}
 	}
+}
+
+// LimiterEntry is a snapshot of a single rate limiter client for admin inspection.
+type LimiterEntry struct {
+	IP       string    `json:"ip"`
+	Rate     float64   `json:"rate"`
+	Burst    int       `json:"burst"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+// maxSnapshotEntries caps the number of entries returned by Snapshot to
+// prevent unbounded memory allocation if the client map grows very large.
+const maxSnapshotEntries = 10000
+
+// Snapshot returns a copy of active rate limiter entries for admin inspection.
+// Returns at most maxSnapshotEntries to bound allocation size under RLock.
+// Safe for concurrent use.
+func (l *Limiter) Snapshot() []LimiterEntry {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	cap := len(l.clients)
+	if cap > maxSnapshotEntries {
+		cap = maxSnapshotEntries
+	}
+	entries := make([]LimiterEntry, 0, cap)
+	for key, c := range l.clients {
+		entries = append(entries, LimiterEntry{
+			IP:       key.ip,
+			Rate:     float64(key.rate),
+			Burst:    key.burst,
+			LastSeen: c.lastSeen,
+		})
+		if len(entries) >= maxSnapshotEntries {
+			break
+		}
+	}
+	return entries
 }

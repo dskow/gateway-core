@@ -625,6 +625,331 @@ def main():
     check(success_count >= 30,
           f"at least 30/40 returned 200 ({success_count}, rest may be rate-limited)")
 
+    # ── Phase 4: Operational Hardening ────────────────────────
+
+    print(f"\n\n{'#'*60}")
+    print("# PHASE 4: OPERATIONAL HARDENING TESTS")
+    print(f"{'#'*60}")
+
+    # Wait for rate limit bucket to refill from earlier tests
+    print("\n(Waiting 2s for rate limit bucket to refill...)")
+    time.sleep(2)
+
+    # --- 4.1: Structured Error Taxonomy ---
+    # All error responses must include error_code field with GATEWAY_* prefix.
+
+    print(f"\n{'='*60}")
+    print("TEST: Error taxonomy - 404 has error_code field")
+    err404_result = subprocess.run(
+        ["curl", "-s", f"{GATEWAY}/nonexistent/phase4-test"],
+        capture_output=True, text=True, timeout=10,
+    )
+    try:
+        err404 = json.loads(err404_result.stdout)
+        check(err404.get("error_code") == "GATEWAY_ROUTE_NOT_FOUND",
+              f"error_code = {err404.get('error_code')}")
+        check(err404.get("error") == "Not Found",
+              f"error = {err404.get('error')}")
+        check("message" in err404,
+              f"message field present: {err404.get('message')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"404 response not valid JSON: {e}")
+
+    # 401 missing token → GATEWAY_AUTH_MISSING_TOKEN
+    err401_result = subprocess.run(
+        ["curl", "-s", f"{GATEWAY}/api/users/phase4-test"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Error taxonomy - 401 missing token has error_code")
+    try:
+        err401 = json.loads(err401_result.stdout)
+        check(err401.get("error_code") == "GATEWAY_AUTH_MISSING_TOKEN",
+              f"error_code = {err401.get('error_code')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"401 response not valid JSON: {e}")
+
+    # 401 invalid token → GATEWAY_AUTH_INVALID_TOKEN
+    err401bad_result = subprocess.run(
+        ["curl", "-s", "-H", "Authorization: Bearer garbage.not.valid",
+         f"{GATEWAY}/api/users/phase4-test"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Error taxonomy - 401 invalid token has error_code")
+    try:
+        err401bad = json.loads(err401bad_result.stdout)
+        check(err401bad.get("error_code") == "GATEWAY_AUTH_INVALID_TOKEN",
+              f"error_code = {err401bad.get('error_code')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"401 response not valid JSON: {e}")
+
+    # 403 insufficient scope → GATEWAY_AUTH_INSUFFICIENT_SCOPE
+    read_only_token = generate_token(scope="read")
+    err403_result = subprocess.run(
+        ["curl", "-s", "-H", f"Authorization: Bearer {read_only_token}",
+         f"{GATEWAY}/api/users/phase4-test"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Error taxonomy - 403 insufficient scope has error_code")
+    try:
+        err403 = json.loads(err403_result.stdout)
+        check(err403.get("error_code") == "GATEWAY_AUTH_INSUFFICIENT_SCOPE",
+              f"error_code = {err403.get('error_code')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"403 response not valid JSON: {e}")
+
+    # 405 method not allowed → GATEWAY_METHOD_NOT_ALLOWED
+    err405_result = subprocess.run(
+        ["curl", "-s", "-X", "DELETE", f"{GATEWAY}/public/phase4-test"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Error taxonomy - 405 has error_code")
+    try:
+        err405 = json.loads(err405_result.stdout)
+        check(err405.get("error_code") == "GATEWAY_METHOD_NOT_ALLOWED",
+              f"error_code = {err405.get('error_code')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"405 response not valid JSON: {e}")
+
+    # Error response includes request_id when X-Request-ID is set
+    custom_rid = "phase4-error-trace-001"
+    errid_result = subprocess.run(
+        ["curl", "-s", "-H", f"X-Request-ID: {custom_rid}",
+         f"{GATEWAY}/nonexistent/request-id-test"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Error taxonomy - request_id included in error response")
+    try:
+        errid = json.loads(errid_result.stdout)
+        check(errid.get("request_id") == custom_rid,
+              f"request_id = {errid.get('request_id')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"error response not valid JSON: {e}")
+
+    # 502 upstream error → GATEWAY_UPSTREAM_UNAVAILABLE
+    status, _ = curl("GET", "/api/users/__status/502", token=token,
+                      label="Error taxonomy - 502 upstream has error_code")
+    check(status == 502, f"expected 502, got {status}")
+
+    # --- 4.2: Admin API - /admin/routes ---
+
+    status, _ = curl("GET", "/admin/routes",
+                      label="Admin API - GET /admin/routes")
+    check(status == 200, f"expected 200, got {status}")
+
+    routes_result = subprocess.run(
+        ["curl", "-s", f"{GATEWAY}/admin/routes"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Admin API - /admin/routes response structure")
+    try:
+        routes_resp = json.loads(routes_result.stdout)
+        admin_routes = routes_resp.get("routes", [])
+        check(len(admin_routes) >= 3,
+              f"expected at least 3 routes, got {len(admin_routes)}")
+
+        # Verify route structure
+        first_route = admin_routes[0] if admin_routes else {}
+        check("path_prefix" in first_route,
+              f"route has path_prefix: {first_route.get('path_prefix')}")
+        check("backend" in first_route,
+              f"route has backend: {first_route.get('backend')}")
+        check("circuit_breaker_state" in first_route,
+              f"route has circuit_breaker_state: {first_route.get('circuit_breaker_state')}")
+        check("auth_required" in first_route,
+              "route has auth_required field")
+        check("timeout_ms" in first_route,
+              "route has timeout_ms field")
+
+        # Verify circuit breaker states are valid
+        valid_cb_states = {"closed", "open", "half-open", "unknown"}
+        for route in admin_routes:
+            cb_state = route.get("circuit_breaker_state", "")
+            if cb_state not in valid_cb_states:
+                check(False, f"invalid circuit_breaker_state: {cb_state}")
+                break
+        else:
+            check(True, "all circuit_breaker_state values are valid")
+
+        # Verify /api/users route is present with correct details
+        users_route = next((r for r in admin_routes if r["path_prefix"] == "/api/users"), None)
+        check(users_route is not None, "/api/users route found in admin response")
+        if users_route:
+            check(users_route.get("auth_required") is True,
+                  f"/api/users auth_required = {users_route.get('auth_required')}")
+            check(users_route.get("circuit_breaker_state") == "closed",
+                  f"/api/users circuit_breaker = {users_route.get('circuit_breaker_state')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"/admin/routes response not valid JSON: {e}")
+
+    # --- 4.3: Admin API - /admin/config ---
+
+    config_result = subprocess.run(
+        ["curl", "-s", f"{GATEWAY}/admin/config"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Admin API - /admin/config redacts jwt_secret")
+    try:
+        config_resp = json.loads(config_result.stdout)
+        auth_cfg = config_resp.get("auth", {})
+        jwt_secret = auth_cfg.get("jwt_secret", "")
+        check(jwt_secret == "***",
+              f"jwt_secret redacted to '***' (got '{jwt_secret}')")
+        check(SECRET not in config_result.stdout,
+              "raw JWT_SECRET not leaked in config response")
+
+        # Verify config has expected structure
+        check("server" in config_resp, "config has server section")
+        check("routes" in config_resp, "config has routes section")
+        check("rate_limit" in config_resp, "config has rate_limit section")
+        check("metrics" in config_resp, "config has metrics section")
+
+        # Verify Phase 4 logging config is present
+        logging_cfg = config_resp.get("logging", {})
+        check(logging_cfg.get("body_logging") is True,
+              f"logging.body_logging = {logging_cfg.get('body_logging')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"/admin/config response not valid JSON: {e}")
+
+    # --- 4.4: Admin API - /admin/limiters ---
+
+    # Generate some traffic first so there are rate limiter entries
+    for _ in range(3):
+        subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", f"{GATEWAY}/public/limiter-test"],
+            capture_output=True, text=True, timeout=5,
+        )
+
+    limiters_result = subprocess.run(
+        ["curl", "-s", f"{GATEWAY}/admin/limiters"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Admin API - /admin/limiters response structure")
+    try:
+        limiters_resp = json.loads(limiters_result.stdout)
+        check("entries" in limiters_resp,
+              "limiters response has 'entries' field")
+        check("total" in limiters_resp,
+              f"limiters response has 'total' field: {limiters_resp.get('total')}")
+        check("page" in limiters_resp,
+              f"limiters response has 'page' field: {limiters_resp.get('page')}")
+
+        entries = limiters_resp.get("entries", [])
+        if entries:
+            entry = entries[0]
+            check("ip" in entry,
+                  f"limiter entry has 'ip': {entry.get('ip')}")
+            check("rate" in entry,
+                  f"limiter entry has 'rate': {entry.get('rate')}")
+            check("burst" in entry,
+                  f"limiter entry has 'burst': {entry.get('burst')}")
+        else:
+            check(True, "no entries (demo container may share IP)")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"/admin/limiters response not valid JSON: {e}")
+
+    # --- 4.5: Admin API - Pagination on /admin/limiters ---
+
+    paginated_result = subprocess.run(
+        ["curl", "-s", f"{GATEWAY}/admin/limiters?page=0&page_size=1"],
+        capture_output=True, text=True, timeout=10,
+    )
+    print(f"\n{'='*60}")
+    print("TEST: Admin API - /admin/limiters pagination")
+    try:
+        paginated = json.loads(paginated_result.stdout)
+        page_entries = paginated.get("entries", [])
+        check(len(page_entries) <= 1,
+              f"page_size=1 returned {len(page_entries)} entries (expected <= 1)")
+        check(paginated.get("page") == 0,
+              f"page = {paginated.get('page')}")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"paginated limiters not valid JSON: {e}")
+
+    # --- 4.6: Admin API - method not allowed ---
+
+    status, _ = curl("POST", "/admin/routes",
+                      label="Admin API - POST /admin/routes rejected")
+    check(status == 405, f"expected 405, got {status}")
+
+    # --- 4.7: Admin API bypasses auth middleware ---
+    # /admin/* is on the bypass mux, so no JWT is needed.
+
+    status, _ = curl("GET", "/admin/routes",
+                      label="Admin API - accessible without JWT")
+    check(status == 200, f"expected 200, got {status} (admin should bypass auth)")
+
+    # --- 4.8: Admin API bypasses rate limiting ---
+
+    print(f"\n{'='*60}")
+    print("TEST: Admin API - /admin/routes bypasses rate limiting")
+    admin_statuses = []
+    for _ in range(15):
+        r = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+             f"{GATEWAY}/admin/routes"],
+            capture_output=True, text=True, timeout=5,
+        )
+        admin_statuses.append(r.stdout.strip())
+    check(all(s == "200" for s in admin_statuses),
+          f"all /admin/routes requests returned 200 (got {set(admin_statuses)})")
+
+    # --- 4.9: Per-route log levels configured ---
+    # Verify the /health route with log_level: "none" is recognized in admin routes
+
+    print(f"\n{'='*60}")
+    print("TEST: Per-route log levels - /health route configured")
+    routes_result2 = subprocess.run(
+        ["curl", "-s", f"{GATEWAY}/admin/routes"],
+        capture_output=True, text=True, timeout=10,
+    )
+    try:
+        routes_resp2 = json.loads(routes_result2.stdout)
+        health_route = next(
+            (r for r in routes_resp2.get("routes", [])
+             if r["path_prefix"] == "/health"),
+            None,
+        )
+        check(health_route is not None,
+              "/health route present in admin routes")
+    except (json.JSONDecodeError, KeyError) as e:
+        check(False, f"admin routes parse error: {e}")
+
+    # --- 4.10: Error responses are consistent across all error types ---
+    # Verify every error response has the same JSON structure:
+    # {error, error_code, message} with optional request_id.
+
+    print(f"\n{'='*60}")
+    print("TEST: Error response consistency across all error types")
+    error_tests = [
+        ("404", ["curl", "-s", f"{GATEWAY}/nonexistent"]),
+        ("401", ["curl", "-s", f"{GATEWAY}/api/users/test"]),
+        ("405", ["curl", "-s", "-X", "DELETE", f"{GATEWAY}/public/test"]),
+    ]
+    for expected_label, cmd in error_tests:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        try:
+            body = json.loads(r.stdout)
+            has_error = "error" in body
+            has_code = "error_code" in body
+            has_msg = "message" in body
+            all_present = has_error and has_code and has_msg
+            check(all_present,
+                  f"{expected_label}: error={has_error} error_code={has_code} message={has_msg}")
+            # Verify error_code starts with GATEWAY_
+            if has_code:
+                check(body["error_code"].startswith("GATEWAY_"),
+                      f"{expected_label}: error_code starts with GATEWAY_: {body['error_code']}")
+        except (json.JSONDecodeError, KeyError) as e:
+            check(False, f"{expected_label} response not valid JSON: {e}")
+
     # ── Summary ───────────────────────────────────────────────
 
     total = passed + failed

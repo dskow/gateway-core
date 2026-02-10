@@ -1,10 +1,11 @@
 package middleware
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+
+	"github.com/dskow/gateway-core/internal/apierror"
 )
 
 // Recovery returns middleware that recovers from panics, logs the stack trace,
@@ -22,12 +23,7 @@ func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 						"path", r.URL.Path,
 						"request_id", GetRequestID(r.Context()),
 					)
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"error":   "Internal Server Error",
-						"message": "an unexpected error occurred",
-					})
+					apierror.WriteJSON(w, r, http.StatusInternalServerError, apierror.InternalError, "an unexpected error occurred")
 				}
 			}()
 			next.ServeHTTP(w, r)

@@ -1,8 +1,9 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/dskow/gateway-core/internal/apierror"
 )
 
 // BodyLimit returns middleware that limits the size of request bodies.
@@ -14,7 +15,7 @@ func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Early reject: if Content-Length is known and exceeds limit, reject immediately
 			if r.ContentLength > maxBytes {
-				WriteBodyLimitError(w)
+				WriteBodyLimitError(w, r)
 				return
 			}
 			// Safety net: wrap body with MaxBytesReader for chunked/streaming bodies
@@ -28,11 +29,6 @@ func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {
 
 // WriteBodyLimitError writes a 413 JSON error response. Called by handlers
 // that detect a MaxBytesReader error.
-func WriteBodyLimitError(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusRequestEntityTooLarge)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error":   "Request Entity Too Large",
-		"message": "request body exceeds maximum allowed size",
-	})
+func WriteBodyLimitError(w http.ResponseWriter, r *http.Request) {
+	apierror.WriteJSON(w, r, http.StatusRequestEntityTooLarge, apierror.BodyTooLarge, "request body exceeds maximum allowed size")
 }

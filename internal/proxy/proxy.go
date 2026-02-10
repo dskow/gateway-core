@@ -5,7 +5,6 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,21 +14,32 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/dskow/gateway-core/internal/apierror"
 	"github.com/dskow/gateway-core/internal/circuitbreaker"
 	"github.com/dskow/gateway-core/internal/config"
 	"github.com/dskow/gateway-core/internal/metrics"
 	"github.com/dskow/gateway-core/internal/routing"
 )
 
+// responseBufferPool reuses responseBuffer structs across retry attempts
+// to reduce GC pressure. Each non-final retry attempt gets/puts one.
+var responseBufferPool = sync.Pool{
+	New: func() interface{} {
+		return &responseBuffer{header: make(http.Header)}
+	},
+}
+
 // Router matches incoming requests to configured routes and proxies
 // them to the appropriate backend.
 type Router struct {
-	routes   []config.RouteConfig
-	proxies  map[string]*httputil.ReverseProxy
-	breakers map[string]*circuitbreaker.CompositeBreaker
-	logger   *slog.Logger
+	routes     []config.RouteConfig
+	proxies    map[string]*httputil.ReverseProxy
+	breakers   map[string]*circuitbreaker.CompositeBreaker
+	methodSets map[string]map[string]bool // pathPrefix → allowed methods (upper-case)
+	logger     *slog.Logger
 }
 
 // New creates a Router from the given route configurations. Routes are
@@ -56,16 +66,29 @@ func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.Compos
 
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("proxy error", "error", err, "backend", rte.Backend, "path", r.URL.Path)
-			writeJSONError(w, http.StatusBadGateway, "upstream service unavailable")
+			apierror.WriteJSON(w, r, http.StatusBadGateway, apierror.UpstreamUnavailable, "upstream service unavailable")
 		}
 		proxies[route.PathPrefix] = proxy
 	}
 
+	// Pre-build method sets for O(1) method validation (P7).
+	methodSets := make(map[string]map[string]bool, len(sorted))
+	for _, route := range sorted {
+		if len(route.Methods) > 0 {
+			ms := make(map[string]bool, len(route.Methods))
+			for _, m := range route.Methods {
+				ms[strings.ToUpper(m)] = true
+			}
+			methodSets[route.PathPrefix] = ms
+		}
+	}
+
 	return &Router{
-		routes:   sorted,
-		proxies:  proxies,
-		breakers: breakers,
-		logger:   logger,
+		routes:     sorted,
+		proxies:    proxies,
+		breakers:   breakers,
+		methodSets: methodSets,
+		logger:     logger,
 	}, nil
 }
 
@@ -109,12 +132,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	route, ok := rt.matchRoute(r.URL.Path)
 	if !ok {
-		writeJSONError(w, http.StatusNotFound, "no matching route")
+		apierror.WriteJSON(w, r, http.StatusNotFound, apierror.RouteNotFound, "no matching route")
 		return
 	}
 
-	if len(route.Methods) > 0 && !methodAllowed(r.Method, route.Methods) {
-		writeJSONError(w, http.StatusMethodNotAllowed, fmt.Sprintf("method %s not allowed for %s", r.Method, route.PathPrefix))
+	if ms := rt.methodSets[route.PathPrefix]; ms != nil && !ms[r.Method] {
+		apierror.WriteJSON(w, r, http.StatusMethodNotAllowed, apierror.MethodNotAllowed, fmt.Sprintf("method %s not allowed for %s", r.Method, route.PathPrefix))
 		return
 	}
 
@@ -131,7 +154,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					w.Write([]byte("\n"))
 				}
 			} else {
-				writeJSONError(w, http.StatusServiceUnavailable, "circuit breaker open")
+				apierror.WriteJSON(w, r, http.StatusServiceUnavailable, apierror.CircuitOpen, "circuit breaker open")
 			}
 			return
 		}
@@ -166,7 +189,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check for context cancellation before each attempt (clean propagation).
 		if r.Context().Err() != nil {
-			writeJSONError(w, http.StatusGatewayTimeout, "request cancelled")
+			apierror.WriteJSON(w, r, http.StatusGatewayTimeout, apierror.RequestCancelled, "request cancelled")
 			return
 		}
 
@@ -194,7 +217,8 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Non-final attempt: buffer the full response.
-		buf := &responseBuffer{header: make(http.Header), statusCode: http.StatusOK}
+		buf := responseBufferPool.Get().(*responseBuffer)
+		buf.Reset()
 		proxy.ServeHTTP(buf, rWithCtx)
 		cancel()
 
@@ -207,6 +231,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Header().Set("X-Gateway-Latency", time.Since(start).String())
 			buf.replayTo(recorder)
+			responseBufferPool.Put(buf)
 			break
 		}
 
@@ -214,6 +239,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if breaker != nil {
 			breaker.RecordFailure(latency)
 		}
+		responseBufferPool.Put(buf)
 
 		metrics.RetryTotal.WithLabelValues(route.PathPrefix, route.Backend).Inc()
 
@@ -268,44 +294,6 @@ func isRetryable(status int) bool {
 		status == http.StatusGatewayTimeout
 }
 
-// Pre-serialized JSON error bodies avoid per-request json.Encoder allocations.
-var (
-	errBodyNotFound     = mustMarshalError(http.StatusNotFound, "no matching route")
-	errBodyBadGateway   = mustMarshalError(http.StatusBadGateway, "upstream service unavailable")
-	errBodyCircuitOpen  = mustMarshalError(http.StatusServiceUnavailable, "circuit breaker open")
-	errBodyTimeout      = mustMarshalError(http.StatusGatewayTimeout, "request cancelled")
-)
-
-func mustMarshalError(status int, message string) []byte {
-	b, _ := json.Marshal(map[string]interface{}{
-		"error":   http.StatusText(status),
-		"message": message,
-	})
-	return append(b, '\n')
-}
-
-func writeJSONError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	// Use pre-serialized body for common error messages to avoid
-	// json.Encoder allocation on every error response.
-	switch {
-	case status == http.StatusNotFound && message == "no matching route":
-		w.Write(errBodyNotFound)
-	case status == http.StatusBadGateway && message == "upstream service unavailable":
-		w.Write(errBodyBadGateway)
-	case status == http.StatusServiceUnavailable && message == "circuit breaker open":
-		w.Write(errBodyCircuitOpen)
-	case status == http.StatusGatewayTimeout && message == "request cancelled":
-		w.Write(errBodyTimeout)
-	default:
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   http.StatusText(status),
-			"message": message,
-		})
-	}
-}
 
 // latencyWriter wraps an http.ResponseWriter and injects the
 // X-Gateway-Latency header just before the first WriteHeader call.
@@ -365,6 +353,16 @@ type responseBuffer struct {
 	body       bytes.Buffer
 	statusCode int
 	written    bool
+}
+
+// Reset clears the buffer for reuse via the pool.
+func (b *responseBuffer) Reset() {
+	for k := range b.header {
+		delete(b.header, k)
+	}
+	b.body.Reset()
+	b.statusCode = http.StatusOK
+	b.written = false
 }
 
 func (b *responseBuffer) Header() http.Header { return b.header }

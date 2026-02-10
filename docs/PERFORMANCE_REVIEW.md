@@ -308,3 +308,143 @@ This is also more correct per the CORS specification, which only requires these 
 | `internal/ratelimit/ratelimit_test.go` | Removed `pathMatchesPrefix` tests (moved to routing) |
 | `internal/config/config_test.go` | `Warnings` to `cfg.Warnings` |
 | `internal/middleware/middleware_test.go` | CORS tests add Origin header; new no-Origin test |
+
+---
+
+# Phase 4 — Post-Operational Hardening Audit
+
+Additional performance issues discovered during a full codebase audit after Phase 4 (Operational Hardening) was completed.
+
+## Summary
+
+| # | Issue | File | Severity | Hot Path? | Status |
+|---|-------|------|----------|-----------|--------|
+| P1 | `redactSensitive` O(n·k²) re-lowercasing | `logging.go:151` | Medium | body_logging on | Fixed |
+| P2 | Data race on `currentRoutes` slice | `main.go:117,212` | **High** | Every request | Fixed |
+| P3 | `responseBuffer` alloc per retry attempt | `proxy.go:197` | Low-Med | Retry routes | Fixed |
+| P4 | `Snapshot()` unbounded copy under RLock | `ratelimit.go:260` | Low | Admin only | Fixed |
+| P5 | Body capture allocations per request | `logging.go:135` | Low-Med | body_logging on | Fixed |
+| P6 | `deadlineWriter.claimed` data race | `deadline.go:51` | **High** | global_timeout on | Fixed |
+| P7 | Linear method scan with EqualFold | `proxy.go:256` | Very Low | Every request | Fixed |
+| P8 | Shallow config copy races with hot-reload | `admin.go:150` | Low | Admin only | Verified safe |
+| P9 | 4 prefix checks on every request | `main.go:176` | Very Low | Every request | Fixed |
+
+---
+
+## P1 · `redactSensitive()` rebuilds `strings.ToLower(s)` on every field match
+
+**File:** `internal/middleware/logging.go`
+
+**Problem:** The redaction function calls `strings.ToLower(s)` to create a lowercase copy, then inside the inner loop, after every redaction splice, recalculates `lower = strings.ToLower(s)`. With 5 sensitive field names × potential multiple matches, this is O(fields × matches × len(body)). For a 4KB body, this produces ~40KB of redundant string copying.
+
+**Impact:** Only fires when `body_logging: true`, but when enabled, applies to every request and response with a text content type.
+
+**Fix:** Replaced the manual loop-and-splice approach with a single compiled `regexp.ReplaceAllStringFunc` that matches all sensitive field patterns in one pass. The regex is compiled once at package init time.
+
+---
+
+## P2 · Data race on `currentRoutes` slice
+
+**File:** `cmd/gateway/main.go`
+
+**Problem:** The `routeLogLevel` closure reads `currentRoutes` on every request while the `OnReload` callback writes to it from the fsnotify goroutine. This is a data race on the slice header (pointer + len + cap). Detectable by `go test -race` and can cause segfaults under load during config reload.
+
+**Impact:** Every request. The race window is small (only during hot-reload) but the consequence is a crash.
+
+**Fix:** Replaced the bare slice variable with `atomic.Value` for lock-free reads. The reload callback stores the new slice atomically. The `routeLogLevel` closure loads it atomically. Also switched from `strings.HasPrefix` to `routing.MatchesPrefix` for correctness (path boundary enforcement).
+
+---
+
+## P3 · `responseBuffer` allocates on every non-final retry attempt
+
+**File:** `internal/proxy/proxy.go`
+
+**Problem:** Each non-final retry attempt allocates a new `responseBuffer{header: make(http.Header)}` containing a `bytes.Buffer` and an `http.Header` map. For routes with `retry_attempts: 2`, this is 1-2 short-lived allocations per request that are immediately GC'd.
+
+**Impact:** Only routes with retries configured. Each allocation is ~256 bytes but contributes to GC pressure under high throughput.
+
+**Fix:** Added a `sync.Pool` for `responseBuffer` instances. Buffers are reset and returned to the pool after use.
+
+---
+
+## P4 · `Snapshot()` unbounded copy under RLock
+
+**File:** `internal/ratelimit/ratelimit.go`
+
+**Problem:** `Snapshot()` allocates a slice and copies every client entry while holding `RLock`. Under high traffic with thousands of unique IPs, the allocation + copy duration blocks the write path (new client insertions).
+
+**Impact:** Admin endpoint only (not hot path), but can cause latency spikes on the rate limiter if called while under heavy traffic.
+
+**Fix:** Added a hard cap of 10,000 entries on the snapshot. Iteration stops after the cap is reached.
+
+---
+
+## P5 · Body capture creates multiple reader wrappers per request
+
+**File:** `internal/middleware/logging.go`
+
+**Problem:** `captureRequestBody` wraps `r.Body` with `TeeReader` → `LimitReader` → `ReadAll`, then reconstructs the body with `io.NopCloser(io.MultiReader(&buf, r.Body))`. This creates 3+ wrapper objects per request and `ReadAll` allocates a growing byte slice up to `maxBytes`.
+
+**Impact:** Only when body logging is enabled.
+
+**Fix:** Added a `sync.Pool` for the `bodyCapture` struct used to capture response bodies. Instances are obtained from the pool at the start of each request with body logging, reset, and returned after the log line is emitted. This eliminates the per-request allocation of the capture buffer and its internal `bytes.Buffer`.
+
+---
+
+## P6 · `deadlineWriter.claimed` data race
+
+**File:** `internal/middleware/deadline.go`
+
+**Problem:** `deadlineWriter.claimed` is a plain `bool` accessed from two concurrent goroutines without synchronization:
+1. The handler goroutine sets `claimed = true` via `WriteHeader`/`Write`
+2. The main goroutine reads/writes `claimed` via `tryClaimWrite()`
+
+The comment claims synchronization via the done channel, but both goroutines can race in the `<-ctx.Done()` path: the handler may be mid-`Write` while the main goroutine enters `tryClaimWrite()`.
+
+**Impact:** When `global_timeout_ms > 0`. Can cause double response writes (corrupted HTTP response) or panic on concurrent header write.
+
+**Fix:** Replaced `bool` with `sync/atomic.Bool` and `tryClaimWrite()` with `CompareAndSwap(false, true)` for lock-free atomic claiming.
+
+---
+
+## P7 · `methodAllowed` linear scan with EqualFold
+
+**File:** `internal/proxy/proxy.go`
+
+**Problem:** Every request calls `methodAllowed` which linearly scans the methods slice using `strings.EqualFold`. EqualFold handles Unicode case folding, which is unnecessary for HTTP methods (always ASCII uppercase).
+
+**Impact:** Very low — 4-6 iterations of EqualFold is nanoseconds. But trivially fixable.
+
+**Fix:** Pre-built a `map[string]bool` method set per route at `New()` time. The `ServeHTTP` hot path does a single map lookup instead of a linear scan.
+
+---
+
+## P8 · Shallow config copy in admin handler races with hot-reload
+
+**File:** `internal/admin/admin.go`
+
+**Problem:** `redacted := *cfg` does a shallow copy. The `Routes` field is a `[]RouteConfig` — the slice header is copied but the underlying array is shared with the reloader. If hot-reload swaps `reloader.current` while `json.Encode` is iterating the routes, the serialization races.
+
+**Impact:** Admin endpoint only. Theoretical race — requires a reload during the JSON encoding window.
+
+**Fix:** Upon analysis, this is a **false positive**. The `Reloader.Reload()` method creates an entirely new `*Config` struct and swaps the pointer atomically under the write lock. The old config instance is never mutated — it becomes read-only garbage. The admin handler's `redacted := *cfg` creates a stack copy of the struct, and the `Routes` slice header points to an immutable backing array. Since no goroutine ever writes to the old config after it's replaced, there is no actual race. No code change needed.
+
+---
+
+## P9 · Combined handler checks 4 string prefixes on every request
+
+**File:** `cmd/gateway/main.go`
+
+**Problem:** Every request evaluates:
+```go
+strings.HasPrefix(r.URL.Path, "/health") ||
+strings.HasPrefix(r.URL.Path, "/ready") ||
+(cfg.Metrics.IsEnabled() && r.URL.Path == metricsPath) ||
+(adminEnabled && strings.HasPrefix(r.URL.Path, "/admin/"))
+```
+
+This is 4 string operations on every request, including the hot proxy path where none of these match.
+
+**Impact:** Very low (~10ns total), but easily optimizable.
+
+**Fix:** Built a prefix set at startup and consolidated the bypass check into a `bypassMux` pattern. The mux `Handle` registrations handle routing directly, eliminating the runtime string comparisons.

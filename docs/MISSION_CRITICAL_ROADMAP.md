@@ -197,34 +197,76 @@ routes:
 
 ---
 
-## Phase 4 — Operational Hardening (PLANNED)
+## Phase 4 — Operational Hardening (COMPLETE)
 
-Production deployment and operational tooling.
+Production deployment and operational tooling. All changes are backward-compatible — existing configs work without modification.
 
 ### 1. Structured Error Taxonomy
 
-- Standardize error response format with error codes, not just messages
-- Add `error_code` field for machine-readable error classification
-- Document all error codes for API consumers
+**Solution:** Centralized error response package (`internal/apierror/`) with typed `ErrorCode`, standardized `ErrorResponse` struct, and a single `WriteJSON` function used by all error-producing components. 12 machine-readable error codes form a stable API contract (`GATEWAY_*` prefix). Pre-serialized JSON bodies for the 6 most common errors avoid allocation in the hot path. Internal details (stack traces, upstream errors) are never exposed to clients. Request ID is included when available.
+
+**Files:** `internal/apierror/apierror.go`
+
+**Migrated:** `internal/proxy/proxy.go`, `internal/auth/auth.go`, `internal/ratelimit/ratelimit.go`, `internal/middleware/recovery.go`, `internal/middleware/deadline.go`, `internal/middleware/bodylimit.go`
 
 ### 2. Access Logging Improvements
 
-- Add configurable log levels per route (reduce noise for health checks)
-- Add request/response body logging option for debugging (opt-in, size-limited)
-- Support log output to file with rotation
+**a) Per-Route Log Levels** — Each route accepts a `log_level` field: `"debug"`, `"info"`, `"warn"`, `"error"`, or `"none"`. Default: `"info"`. The `"none"` level completely suppresses access log entries for that route (ideal for health checks). The Logging middleware accepts a `routeLogLevel` callback (same pattern as `routeRequiresAuth`) and uses `logger.Log(ctx, level, ...)`.
+
+**b) Request/Response Body Logging** — Opt-in via `logging.body_logging: true`. Captures request body via TeeReader and response body via a wrapping ResponseWriter. Bodies truncated to `max_body_log_bytes` (default 4096). Only text-based content types (JSON, text/*, XML, form-urlencoded) are captured. Sensitive fields (`password`, `secret`, `token`, `key`, `authorization`) are redacted to `"***"` before logging.
+
+**c) Log Output to File with Rotation** — New `internal/logging/writer.go` implements `io.Writer` + `io.Closer` with size-based rotation. Pure stdlib, no external dependencies. Rotated files are named `<base>-<timestamp><ext>`. Old files are cleaned up based on `max_backups` and `max_age_days`.
+
+**Files:** `internal/middleware/logging.go`, `internal/logging/writer.go`, `internal/config/config.go`, `cmd/gateway/main.go`
 
 ### 3. TLS Termination
 
-- Native TLS support with cert/key config
-- Auto-reload certificates on file change (for Let's Encrypt rotation)
-- Minimum TLS version enforcement (1.2+)
+**Solution:** Native TLS support via `server.tls` config. When enabled, the server uses `ListenAndServeTLS` with a `tls.Config.GetCertificate` callback for runtime certificate rotation. `CertLoader` (`internal/tlsutil/certloader.go`) loads the cert/key pair at startup and watches both files via fsnotify with 300ms debounce. Certificate swaps happen under `sync.RWMutex` — active connections are not dropped. Minimum TLS version is configurable (`"1.2"` or `"1.3"`), default `1.2`.
+
+**Files:** `internal/tlsutil/certloader.go`, `internal/config/config.go`, `cmd/gateway/main.go`
 
 ### 4. Admin API
 
-- `/admin/routes` — list configured routes and their status
-- `/admin/config` — view running config (secrets redacted)
-- `/admin/limiters` — view active rate limiter entries
-- Protected by separate auth or IP allowlist
+**Solution:** Read-only admin API (`internal/admin/admin.go`) with three inspection endpoints, all protected by IP allowlist (CIDR-based). Registered on a separate mux that bypasses the public middleware stack (same pattern as health/metrics). No mutating operations.
+
+- **`GET /admin/routes`** — Returns routes with backend URL, methods, auth_required, timeout, and current circuit breaker state (`"closed"`, `"open"`, `"half-open"`)
+- **`GET /admin/config`** — Returns running config from `Reloader.Current()` with `jwt_secret` redacted to `"***"`
+- **`GET /admin/limiters`** — Returns active rate limiter entries (IP, rate, burst, last_seen) with pagination (`?page=1&page_size=100`)
+
+Rate limiter inspection is supported by a new `Snapshot()` method on `ratelimit.Limiter` that reads under `RLock`.
+
+**Files:** `internal/admin/admin.go`, `internal/ratelimit/ratelimit.go`, `internal/config/config.go`, `cmd/gateway/main.go`
+
+### Config Additions (backward-compatible)
+
+```yaml
+logging:
+  output: "stdout"           # "stdout", "stderr", or file path
+  max_size_mb: 100           # rotation threshold (file output only)
+  max_backups: 3             # rotated files to keep
+  max_age_days: 30           # max age of rotated files
+  body_logging: false        # opt-in request/response body logging
+  max_body_log_bytes: 4096   # max body bytes per request
+
+server:
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    min_version: "1.2"       # "1.2" or "1.3"
+
+admin:
+  enabled: false
+  ip_allowlist: []           # required when enabled, CIDR notation
+
+routes:
+  - path_prefix: "/health"
+    log_level: "none"        # per-route: "debug", "info", "warn", "error", "none"
+```
+
+### Documentation
+
+- [`docs/ERROR_CODES.md`](ERROR_CODES.md) — Full error code reference with response format, catalog, and client usage examples
 
 ---
 
@@ -266,7 +308,7 @@ Raise test quality and automate the release pipeline.
 | 1 | Security Hardening | **Complete** | None |
 | 2 | Observability & Metrics | **Complete** | `prometheus/client_golang`, `fsnotify/fsnotify` |
 | 3 | Resilience & Reliability | **Complete** | Phase 2 (metrics for circuit breaker) |
-| 4 | Operational Hardening | Planned | Phase 1 (TLS needs security headers) |
+| 4 | Operational Hardening | **Complete** | Phase 1 (TLS needs security headers) |
 | 5 | Testing & CI/CD | Planned | Phase 2-3 (integration tests need metrics + circuit breaker) |
 
 Phases 2 and 4 can run in parallel. Phase 3 benefits from Phase 2 metrics. Phase 5 should come last since it tests features from all prior phases.

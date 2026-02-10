@@ -4,6 +4,11 @@ server:
   write_timeout: 15s
   shutdown_timeout: 10s
 
+logging:
+  output: "stdout"
+  body_logging: true
+  max_body_log_bytes: 2048
+
 metrics:
   enabled: true
   path: "/metrics"
@@ -18,6 +23,10 @@ auth:
   issuer: "https://auth.example.com"
   audience: "api-gateway"
   scopes: ["read", "write"]
+
+admin:
+  enabled: true
+  ip_allowlist: ["0.0.0.0/0"]
 
 routes:
   - path_prefix: "/api/users"
@@ -43,3 +52,11 @@ routes:
     methods: ["GET"]
     auth_required: false
     timeout_ms: 5000
+    log_level: "debug"
+
+  - path_prefix: "/health"
+    backend: "http://users-service:3001"
+    methods: ["GET"]
+    auth_required: false
+    timeout_ms: 2000
+    log_level: "none"

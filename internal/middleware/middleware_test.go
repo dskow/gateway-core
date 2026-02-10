@@ -15,7 +15,7 @@ func TestLogging_OutputsJSON(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	handler := Logging(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Logging(logger, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -42,7 +42,7 @@ func TestLogging_CapturesStatusCode(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	handler := Logging(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Logging(logger, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 
@@ -203,7 +203,7 @@ func TestBodyLimit_OverLimit(t *testing.T) {
 	handler := BodyLimit(100)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := io.ReadAll(r.Body)
 		if err != nil {
-			WriteBodyLimitError(w)
+			WriteBodyLimitError(w, r)
 			return
 		}
 		w.WriteHeader(http.StatusOK)

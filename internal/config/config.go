@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -15,24 +16,26 @@ import (
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Server         ServerConfig         `yaml:"server"`
-	Metrics        MetricsConfig        `yaml:"metrics"`
-	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
-	Auth           AuthConfig           `yaml:"auth"`
-	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
-	Routes         []RouteConfig        `yaml:"routes"`
+	Server         ServerConfig         `yaml:"server" json:"server"`
+	Metrics        MetricsConfig        `yaml:"metrics" json:"metrics"`
+	Logging        LoggingConfig        `yaml:"logging" json:"logging"`
+	RateLimit      RateLimitConfig      `yaml:"rate_limit" json:"rate_limit"`
+	Auth           AuthConfig           `yaml:"auth" json:"auth"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker" json:"circuit_breaker"`
+	Admin          AdminConfig          `yaml:"admin" json:"admin"`
+	Routes         []RouteConfig        `yaml:"routes" json:"routes"`
 
 	// Warnings holds non-fatal config issues detected during loading.
 	// Stored on the Config itself (not a package-level var) so it is
 	// safe to call Load concurrently from the hot-reload goroutine.
-	Warnings []string `yaml:"-"`
+	Warnings []string `yaml:"-" json:"-"`
 }
 
 // MetricsConfig holds Prometheus metrics endpoint settings.
 // Enabled defaults to true; set to false to disable metrics.
 type MetricsConfig struct {
-	Enabled *bool  `yaml:"enabled"`
-	Path    string `yaml:"path"`
+	Enabled *bool  `yaml:"enabled" json:"enabled"`
+	Path    string `yaml:"path" json:"path"`
 }
 
 // IsEnabled returns whether metrics are enabled (defaults to true).
@@ -45,13 +48,38 @@ func (m MetricsConfig) IsEnabled() bool {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port            int           `yaml:"port"`
-	ReadTimeout     time.Duration `yaml:"read_timeout"`
-	WriteTimeout    time.Duration `yaml:"write_timeout"`
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
-	TrustedProxies  []string      `yaml:"trusted_proxies"`
-	MaxBodyBytes    int64         `yaml:"max_body_bytes"`
-	GlobalTimeoutMs int           `yaml:"global_timeout_ms"`
+	Port            int           `yaml:"port" json:"port"`
+	ReadTimeout     time.Duration `yaml:"read_timeout" json:"read_timeout"`
+	WriteTimeout    time.Duration `yaml:"write_timeout" json:"write_timeout"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout" json:"shutdown_timeout"`
+	TrustedProxies  []string      `yaml:"trusted_proxies" json:"trusted_proxies"`
+	MaxBodyBytes    int64         `yaml:"max_body_bytes" json:"max_body_bytes"`
+	GlobalTimeoutMs int           `yaml:"global_timeout_ms" json:"global_timeout_ms"`
+	TLS             TLSConfig     `yaml:"tls" json:"tls"`
+}
+
+// TLSConfig holds TLS termination settings.
+type TLSConfig struct {
+	Enabled    bool   `yaml:"enabled" json:"enabled"`
+	CertFile   string `yaml:"cert_file" json:"cert_file"`
+	KeyFile    string `yaml:"key_file" json:"key_file"`
+	MinVersion string `yaml:"min_version" json:"min_version"` // "1.2" or "1.3"; default: "1.2"
+}
+
+// LoggingConfig holds access log output and debug settings.
+type LoggingConfig struct {
+	Output          string `yaml:"output" json:"output"`                          // "stdout", "stderr", or file path; default: "stdout"
+	MaxSizeMB       int    `yaml:"max_size_mb" json:"max_size_mb"`               // max log file size before rotation; default: 100
+	MaxBackups      int    `yaml:"max_backups" json:"max_backups"`               // number of rotated files to keep; default: 3
+	MaxAgeDays      int    `yaml:"max_age_days" json:"max_age_days"`             // max days to retain rotated files; default: 30
+	BodyLogging     bool   `yaml:"body_logging" json:"body_logging"`             // log request/response bodies; default: false
+	MaxBodyLogBytes int    `yaml:"max_body_log_bytes" json:"max_body_log_bytes"` // max bytes of body to log; default: 4096
+}
+
+// AdminConfig holds admin API settings.
+type AdminConfig struct {
+	Enabled     bool     `yaml:"enabled" json:"enabled"`           // default: false
+	IPAllowlist []string `yaml:"ip_allowlist" json:"ip_allowlist"` // CIDR notation
 }
 
 // GlobalTimeout returns the global request deadline as a time.Duration.
@@ -65,53 +93,64 @@ func (s ServerConfig) GlobalTimeout() time.Duration {
 
 // RateLimitConfig holds the global rate limiter settings.
 type RateLimitConfig struct {
-	RequestsPerSecond float64 `yaml:"requests_per_second"`
-	BurstSize         int     `yaml:"burst_size"`
+	RequestsPerSecond float64 `yaml:"requests_per_second" json:"requests_per_second"`
+	BurstSize         int     `yaml:"burst_size" json:"burst_size"`
 }
 
 // AuthConfig holds JWT/OAuth2 authentication settings.
 type AuthConfig struct {
-	Enabled   bool     `yaml:"enabled"`
-	JWTSecret string   `yaml:"jwt_secret"`
-	Issuer    string   `yaml:"issuer"`
-	Audience  string   `yaml:"audience"`
-	Scopes    []string `yaml:"scopes"`
+	Enabled   bool     `yaml:"enabled" json:"enabled"`
+	JWTSecret string   `yaml:"jwt_secret" json:"jwt_secret"`
+	Issuer    string   `yaml:"issuer" json:"issuer"`
+	Audience  string   `yaml:"audience" json:"audience"`
+	Scopes    []string `yaml:"scopes" json:"scopes"`
 }
 
 // RouteConfig defines a single proxy route.
 type RouteConfig struct {
-	PathPrefix     string               `yaml:"path_prefix"`
-	Backend        string               `yaml:"backend"`
-	StripPrefix    bool                 `yaml:"strip_prefix"`
-	Methods        []string             `yaml:"methods"`
-	AuthRequired   bool                 `yaml:"auth_required"`
-	TimeoutMs      int                  `yaml:"timeout_ms"`
-	RetryAttempts  int                  `yaml:"retry_attempts"`
-	Headers        map[string]string    `yaml:"headers"`
-	RateOverride   *RateLimitConfig     `yaml:"rate_override"`
-	ConnectionPool *ConnectionPoolConfig `yaml:"connection_pool"`
-	FallbackStatus int                  `yaml:"fallback_status"`
-	FallbackBody   string               `yaml:"fallback_body"`
+	PathPrefix     string               `yaml:"path_prefix" json:"path_prefix"`
+	Backend        string               `yaml:"backend" json:"backend"`
+	StripPrefix    bool                 `yaml:"strip_prefix" json:"strip_prefix"`
+	Methods        []string             `yaml:"methods" json:"methods"`
+	AuthRequired   bool                 `yaml:"auth_required" json:"auth_required"`
+	TimeoutMs      int                  `yaml:"timeout_ms" json:"timeout_ms"`
+	RetryAttempts  int                  `yaml:"retry_attempts" json:"retry_attempts"`
+	Headers        map[string]string    `yaml:"headers" json:"headers,omitempty"`
+	RateOverride   *RateLimitConfig     `yaml:"rate_override" json:"rate_override,omitempty"`
+	ConnectionPool *ConnectionPoolConfig `yaml:"connection_pool" json:"connection_pool,omitempty"`
+	FallbackStatus int                  `yaml:"fallback_status" json:"fallback_status"`
+	FallbackBody   string               `yaml:"fallback_body" json:"fallback_body"`
+	LogLevel       string               `yaml:"log_level" json:"log_level"` // "debug", "info", "warn", "error", "none"; default: "info"
+}
+
+// ValidLogLevels are the accepted log level strings for routes.
+var ValidLogLevels = map[string]bool{
+	"":      true, // empty means default ("info")
+	"debug": true,
+	"info":  true,
+	"warn":  true,
+	"error": true,
+	"none":  true,
 }
 
 // CircuitBreakerConfig holds circuit breaker settings applied to all backends.
 type CircuitBreakerConfig struct {
-	WindowSize       int           `yaml:"window_size"`
-	FailureThreshold float64       `yaml:"failure_threshold"`
-	ResetTimeout     time.Duration `yaml:"reset_timeout"`
-	HalfOpenMax      int           `yaml:"half_open_max"`
-	SlowThreshold    time.Duration `yaml:"slow_threshold"`
-	MaxConcurrent    int           `yaml:"max_concurrent"`
-	Adaptive         bool          `yaml:"adaptive"`
-	LatencyCeiling   time.Duration `yaml:"latency_ceiling"`
-	MinThreshold     float64       `yaml:"min_threshold"`
+	WindowSize       int           `yaml:"window_size" json:"window_size"`
+	FailureThreshold float64       `yaml:"failure_threshold" json:"failure_threshold"`
+	ResetTimeout     time.Duration `yaml:"reset_timeout" json:"reset_timeout"`
+	HalfOpenMax      int           `yaml:"half_open_max" json:"half_open_max"`
+	SlowThreshold    time.Duration `yaml:"slow_threshold" json:"slow_threshold"`
+	MaxConcurrent    int           `yaml:"max_concurrent" json:"max_concurrent"`
+	Adaptive         bool          `yaml:"adaptive" json:"adaptive"`
+	LatencyCeiling   time.Duration `yaml:"latency_ceiling" json:"latency_ceiling"`
+	MinThreshold     float64       `yaml:"min_threshold" json:"min_threshold"`
 }
 
 // ConnectionPoolConfig holds per-backend HTTP transport pool settings.
 type ConnectionPoolConfig struct {
-	MaxIdleConns   int           `yaml:"max_idle_conns"`
-	MaxIdlePerHost int           `yaml:"max_idle_per_host"`
-	IdleTimeout    time.Duration `yaml:"idle_timeout"`
+	MaxIdleConns   int           `yaml:"max_idle_conns" json:"max_idle_conns"`
+	MaxIdlePerHost int           `yaml:"max_idle_per_host" json:"max_idle_per_host"`
+	IdleTimeout    time.Duration `yaml:"idle_timeout" json:"idle_timeout"`
 }
 
 // Timeout returns the route timeout as a time.Duration.
@@ -189,6 +228,28 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 8080
+	}
+
+	// Logging defaults
+	if cfg.Logging.Output == "" {
+		cfg.Logging.Output = "stdout"
+	}
+	if cfg.Logging.MaxSizeMB == 0 {
+		cfg.Logging.MaxSizeMB = 100
+	}
+	if cfg.Logging.MaxBackups == 0 {
+		cfg.Logging.MaxBackups = 3
+	}
+	if cfg.Logging.MaxAgeDays == 0 {
+		cfg.Logging.MaxAgeDays = 30
+	}
+	if cfg.Logging.MaxBodyLogBytes == 0 {
+		cfg.Logging.MaxBodyLogBytes = 4096
+	}
+
+	// TLS defaults
+	if cfg.Server.TLS.Enabled && cfg.Server.TLS.MinVersion == "" {
+		cfg.Server.TLS.MinVersion = "1.2"
 	}
 	if cfg.Server.ReadTimeout == 0 {
 		cfg.Server.ReadTimeout = 15 * time.Second
@@ -295,6 +356,41 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("server.global_timeout_ms must be non-negative")
 	}
 
+	// TLS validation
+	if cfg.Server.TLS.Enabled {
+		if cfg.Server.TLS.CertFile == "" {
+			return fmt.Errorf("server.tls.cert_file is required when TLS is enabled")
+		}
+		if cfg.Server.TLS.KeyFile == "" {
+			return fmt.Errorf("server.tls.key_file is required when TLS is enabled")
+		}
+		if cfg.Server.TLS.MinVersion != "1.2" && cfg.Server.TLS.MinVersion != "1.3" {
+			return fmt.Errorf("server.tls.min_version must be \"1.2\" or \"1.3\", got %q", cfg.Server.TLS.MinVersion)
+		}
+	}
+
+	// Logging validation
+	if cfg.Logging.Output != "stdout" && cfg.Logging.Output != "stderr" {
+		if cfg.Logging.MaxSizeMB < 1 {
+			return fmt.Errorf("logging.max_size_mb must be positive when output is a file path")
+		}
+	}
+	if cfg.Logging.BodyLogging && cfg.Logging.MaxBodyLogBytes < 1 {
+		return fmt.Errorf("logging.max_body_log_bytes must be positive when body_logging is enabled")
+	}
+
+	// Admin validation
+	if cfg.Admin.Enabled {
+		if len(cfg.Admin.IPAllowlist) == 0 {
+			return fmt.Errorf("admin.ip_allowlist is required when admin is enabled")
+		}
+		for i, cidr := range cfg.Admin.IPAllowlist {
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				return fmt.Errorf("admin.ip_allowlist[%d]: invalid CIDR %q: %w", i, cidr, err)
+			}
+		}
+	}
+
 	if len(cfg.Routes) == 0 {
 		return fmt.Errorf("at least one route must be configured")
 	}
@@ -325,6 +421,9 @@ func validate(cfg *Config) error {
 		}
 		seen[r.PathPrefix] = true
 
+		if !ValidLogLevels[r.LogLevel] {
+			return fmt.Errorf("routes[%d].log_level must be one of debug, info, warn, error, none; got %q", i, r.LogLevel)
+		}
 		if r.FallbackStatus != 0 && (r.FallbackStatus < 200 || r.FallbackStatus > 599) {
 			return fmt.Errorf("routes[%d].fallback_status must be between 200 and 599", i)
 		}

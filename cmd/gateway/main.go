@@ -5,36 +5,50 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
+	"github.com/dskow/gateway-core/internal/admin"
 	"github.com/dskow/gateway-core/internal/auth"
 	"github.com/dskow/gateway-core/internal/circuitbreaker"
 	"github.com/dskow/gateway-core/internal/config"
 	"github.com/dskow/gateway-core/internal/health"
+	"github.com/dskow/gateway-core/internal/logging"
 	"github.com/dskow/gateway-core/internal/metrics"
 	"github.com/dskow/gateway-core/internal/middleware"
 	"github.com/dskow/gateway-core/internal/proxy"
 	"github.com/dskow/gateway-core/internal/ratelimit"
+	"github.com/dskow/gateway-core/internal/routing"
+	"github.com/dskow/gateway-core/internal/tlsutil"
 )
 
 func main() {
 	configPath := flag.String("config", "configs/gateway.yaml", "path to configuration file")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
+	// --- Phase 4: Initialize log writer from config ---
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Error("failed to load config", "error", err)
+		// Fallback logger for startup errors.
+		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	logWriter, logCloser := buildLogWriter(cfg.Logging)
+	if logCloser != nil {
+		defer logCloser.Close()
+	}
+
+	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	for _, w := range cfg.Warnings {
 		logger.Warn("config warning", "message", w)
@@ -49,6 +63,9 @@ func main() {
 		"trusted_proxies", len(cfg.Server.TrustedProxies),
 		"max_body_bytes", cfg.Server.MaxBodyBytes,
 		"global_timeout_ms", cfg.Server.GlobalTimeoutMs,
+		"tls_enabled", cfg.Server.TLS.Enabled,
+		"admin_enabled", cfg.Admin.Enabled,
+		"log_output", cfg.Logging.Output,
 	)
 
 	// Initialize Prometheus metrics
@@ -96,6 +113,33 @@ func main() {
 		return route.AuthRequired
 	}
 
+	// --- Phase 4: Per-route log level callback ---
+	// Uses atomic.Value for lock-free reads from the request goroutine.
+	// The OnReload callback stores a new slice atomically.
+	var routesRef atomic.Value
+	routesRef.Store(cfg.Routes)
+	routeLogLevel := func(path string) slog.Level {
+		routes := routesRef.Load().([]config.RouteConfig)
+		bestLen := 0
+		bestLevel := slog.LevelInfo
+		for _, route := range routes {
+			if routing.MatchesPrefix(path, route.PathPrefix) && len(route.PathPrefix) > bestLen {
+				bestLen = len(route.PathPrefix)
+				bestLevel = middleware.ParseLogLevel(route.LogLevel)
+			}
+		}
+		return bestLevel
+	}
+
+	// --- Phase 4: Body logging config ---
+	var bodyConfig *middleware.LoggingConfig
+	if cfg.Logging.BodyLogging {
+		bodyConfig = &middleware.LoggingConfig{
+			BodyLogging:     true,
+			MaxBodyLogBytes: cfg.Logging.MaxBodyLogBytes,
+		}
+	}
+
 	// Assemble middleware stack:
 	// Recovery → RequestID → Deadline → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
 	var handler http.Handler = router
@@ -103,7 +147,7 @@ func main() {
 	handler = limiter.Middleware()(handler)
 	handler = middleware.BodyLimit(cfg.Server.MaxBodyBytes)(handler)
 	handler = middleware.CORS(middleware.DefaultCORSConfig())(handler)
-	handler = middleware.Logging(logger)(handler)
+	handler = middleware.Logging(logger, routeLogLevel, bodyConfig)(handler)
 	handler = middleware.SecurityHeaders()(handler)
 	handler = middleware.Deadline(cfg.Server.GlobalTimeout())(handler)
 	handler = middleware.RequestID(handler)
@@ -121,19 +165,44 @@ func main() {
 		logger.Info("metrics endpoint registered", "path", metricsPath)
 	}
 
-	// Combine: health and metrics endpoints bypass the middleware stack
+	// Initialize config reloader (before admin, so admin can reference it).
+	reloader := config.NewReloader(*configPath, cfg, logger)
+
+	// --- Phase 4: Admin API ---
+	adminEnabled := cfg.Admin.Enabled
+	if adminEnabled {
+		adminHandler := admin.New(reloader, limiter, breakers, cfg.Routes, cfg.Admin.IPAllowlist, logger)
+		adminHandler.RegisterRoutes(mux)
+		logger.Info("admin API enabled", "allowlist", cfg.Admin.IPAllowlist)
+	}
+
+	// Build a set of exact-match bypass paths and prefix-match bypass paths
+	// at startup so the hot-path combined handler avoids repeated conditionals.
+	bypassExact := make(map[string]bool)
+	if cfg.Metrics.IsEnabled() {
+		bypassExact[metricsPath] = true
+	}
+	bypassPrefixes := []string{"/health", "/ready"}
+	if adminEnabled {
+		bypassPrefixes = append(bypassPrefixes, "/admin/")
+	}
+
+	// Combine: health, metrics, and admin endpoints bypass the middleware stack
 	combined := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/health") ||
-			strings.HasPrefix(r.URL.Path, "/ready") ||
-			(cfg.Metrics.IsEnabled() && r.URL.Path == metricsPath) {
+		path := r.URL.Path
+		if bypassExact[path] {
 			mux.ServeHTTP(w, r)
 			return
+		}
+		for _, prefix := range bypassPrefixes {
+			if strings.HasPrefix(path, prefix) {
+				mux.ServeHTTP(w, r)
+				return
+			}
 		}
 		handler.ServeHTTP(w, r)
 	})
 
-	// Initialize config reloader
-	reloader := config.NewReloader(*configPath, cfg, logger)
 	reloader.Start()
 	defer reloader.Stop()
 
@@ -157,6 +226,9 @@ func main() {
 			cb.UpdateConfig(newCbCfg)
 			logger.Info("circuit breaker config updated", "backend", backend)
 		}
+
+		// Phase 4: Update route log levels on hot-reload.
+		routesRef.Store(newCfg.Routes)
 	})
 
 	srv := &http.Server{
@@ -166,12 +238,43 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
+	// --- Phase 4: TLS support ---
+	var certLoader *tlsutil.CertLoader
+	if cfg.Server.TLS.Enabled {
+		cl, err := tlsutil.New(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile, logger)
+		if err != nil {
+			logger.Error("failed to load TLS certificate", "error", err)
+			os.Exit(1)
+		}
+		certLoader = cl
+		defer certLoader.Stop()
+
+		minVersion := tls.VersionTLS12
+		if cfg.Server.TLS.MinVersion == "1.3" {
+			minVersion = tls.VersionTLS13
+		}
+
+		srv.TLSConfig = &tls.Config{
+			GetCertificate: certLoader.GetCertificate,
+			MinVersion:     uint16(minVersion),
+		}
+	}
+
 	// Start server in a goroutine
 	go func() {
-		logger.Info("starting gateway", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("server error", "error", err)
-			os.Exit(1)
+		if cfg.Server.TLS.Enabled {
+			logger.Info("starting gateway with TLS", "addr", srv.Addr, "min_tls", cfg.Server.TLS.MinVersion)
+			// Cert/key are loaded by GetCertificate callback, so pass empty strings.
+			if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				logger.Error("server error", "error", err)
+				os.Exit(1)
+			}
+		} else {
+			logger.Info("starting gateway", "addr", srv.Addr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("server error", "error", err)
+				os.Exit(1)
+			}
 		}
 	}()
 
@@ -192,4 +295,24 @@ func main() {
 	}
 
 	logger.Info("gateway stopped gracefully")
+}
+
+// buildLogWriter returns the io.Writer for the slog handler and an optional
+// io.Closer for file-based writers. Returns (os.Stdout, nil) for the default.
+func buildLogWriter(cfg config.LoggingConfig) (io.Writer, io.Closer) {
+	switch cfg.Output {
+	case "stdout", "":
+		return os.Stdout, nil
+	case "stderr":
+		return os.Stderr, nil
+	default:
+		rw, err := logging.NewRotatingWriter(cfg.Output, cfg.MaxSizeMB, cfg.MaxBackups, cfg.MaxAgeDays)
+		if err != nil {
+			// Fall back to stdout if file open fails.
+			slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("failed to open log file, falling back to stdout",
+				"path", cfg.Output, "error", err)
+			return os.Stdout, nil
+		}
+		return rw, rw
+	}
 }

@@ -3,6 +3,25 @@ server:
   read_timeout: 15s
   write_timeout: 15s
   shutdown_timeout: 10s
+  # trusted_proxies: ["10.0.0.0/8"]
+  # max_body_bytes: 1048576
+  # global_timeout_ms: 60000
+
+  # TLS termination (Phase 4). Uncomment to enable native TLS.
+  # tls:
+  #   enabled: true
+  #   cert_file: "/etc/certs/server.crt"
+  #   key_file: "/etc/certs/server.key"
+  #   min_version: "1.2"       # "1.2" or "1.3"
+
+# Access logging configuration (Phase 4).
+# logging:
+#   output: "stdout"           # "stdout", "stderr", or file path (e.g. "/var/log/gateway.log")
+#   max_size_mb: 100           # max log file size before rotation (file output only)
+#   max_backups: 3             # number of rotated files to keep
+#   max_age_days: 30           # max age of rotated files in days
+#   body_logging: false        # log request/response bodies (opt-in, text types only)
+#   max_body_log_bytes: 4096   # max body bytes to capture per request
 
 metrics:
   enabled: true
@@ -18,6 +37,11 @@ auth:
   issuer: "https://auth.example.com"
   audience: "api-gateway"
   scopes: ["read", "write"]
+
+# Admin API (Phase 4). Read-only endpoints for runtime inspection.
+# admin:
+#   enabled: true
+#   ip_allowlist: ["127.0.0.1/32", "10.0.0.0/8"]
 
 routes:
   - path_prefix: "/api/users"
@@ -45,3 +69,8 @@ routes:
     rate_override:
       requests_per_second: 50
       burst_size: 20
+
+  # Per-route log level (Phase 4). Suppress noisy health check logs.
+  # - path_prefix: "/health"
+  #   backend: "http://localhost:3001"
+  #   log_level: "none"        # "debug", "info", "warn", "error", "none"
