@@ -8,7 +8,7 @@ import (
 
 	"log/slog"
 
-	"github.com/dskow/go-api-gateway/internal/config"
+	"github.com/dskow/gateway-core/internal/config"
 	"github.com/golang-jwt/jwt/v5"
 )
 

@@ -1,6 +1,6 @@
 # Performance Review
 
-Comprehensive audit of go-api-gateway identifying 12 performance issues across all internal packages. All issues have been fixed.
+Comprehensive audit of gateway-core identifying 12 performance issues across all internal packages. All issues have been fixed.
 
 ## Summary
 

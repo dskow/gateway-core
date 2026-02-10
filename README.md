@@ -1,4 +1,4 @@
-# go-api-gateway
+# gateway-core
 
 A lightweight, config-driven API gateway written in Go that provides JWT/OAuth2 authentication, per-client rate limiting, and reverse proxy routing to multiple backend services.
 

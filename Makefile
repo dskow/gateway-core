@@ -18,7 +18,7 @@ run: build
 	JWT_SECRET=$${JWT_SECRET:-$$(openssl rand -base64 32)} ./bin/$(BINARY) -config configs/gateway.yaml
 
 docker:
-	docker build -t go-api-gateway .
+	docker build -t gateway-core .
 
 docker-up:
 	docker-compose up --build -d

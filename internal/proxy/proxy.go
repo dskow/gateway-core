@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dskow/go-api-gateway/internal/circuitbreaker"
-	"github.com/dskow/go-api-gateway/internal/config"
-	"github.com/dskow/go-api-gateway/internal/metrics"
-	"github.com/dskow/go-api-gateway/internal/routing"
+	"github.com/dskow/gateway-core/internal/circuitbreaker"
+	"github.com/dskow/gateway-core/internal/config"
+	"github.com/dskow/gateway-core/internal/metrics"
+	"github.com/dskow/gateway-core/internal/routing"
 )
 
 // Router matches incoming requests to configured routes and proxies

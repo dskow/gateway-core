@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dskow/go-api-gateway/internal/metrics"
+	"github.com/dskow/gateway-core/internal/metrics"
 )
 
 func init() {

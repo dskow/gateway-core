@@ -3,7 +3,7 @@ package circuitbreaker
 import (
 	"time"
 
-	"github.com/dskow/go-api-gateway/internal/metrics"
+	"github.com/dskow/gateway-core/internal/metrics"
 )
 
 // BulkheadBreaker limits the number of concurrent in-flight requests to a

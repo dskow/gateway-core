@@ -1,6 +1,6 @@
 # Mission-Critical Roadmap
 
-A phased plan to raise go-api-gateway from a functional prototype to production-grade, mission-critical infrastructure.
+A phased plan to raise gateway-core from a functional prototype to production-grade, mission-critical infrastructure.
 
 ## Phase 1 — Security Hardening (COMPLETE)
 

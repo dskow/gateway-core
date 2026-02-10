@@ -1,4 +1,4 @@
-module github.com/dskow/go-api-gateway
+module github.com/dskow/gateway-core
 
 go 1.22
 

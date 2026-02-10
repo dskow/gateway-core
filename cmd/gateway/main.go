@@ -14,14 +14,14 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/dskow/go-api-gateway/internal/auth"
-	"github.com/dskow/go-api-gateway/internal/circuitbreaker"
-	"github.com/dskow/go-api-gateway/internal/config"
-	"github.com/dskow/go-api-gateway/internal/health"
-	"github.com/dskow/go-api-gateway/internal/metrics"
-	"github.com/dskow/go-api-gateway/internal/middleware"
-	"github.com/dskow/go-api-gateway/internal/proxy"
-	"github.com/dskow/go-api-gateway/internal/ratelimit"
+	"github.com/dskow/gateway-core/internal/auth"
+	"github.com/dskow/gateway-core/internal/circuitbreaker"
+	"github.com/dskow/gateway-core/internal/config"
+	"github.com/dskow/gateway-core/internal/health"
+	"github.com/dskow/gateway-core/internal/metrics"
+	"github.com/dskow/gateway-core/internal/middleware"
+	"github.com/dskow/gateway-core/internal/proxy"
+	"github.com/dskow/gateway-core/internal/ratelimit"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/dskow/go-api-gateway/internal/config"
+	"github.com/dskow/gateway-core/internal/config"
 )
 
 func okHandler() http.Handler {

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dskow/go-api-gateway/internal/metrics"
+	"github.com/dskow/gateway-core/internal/metrics"
 )
 
 // outcome records a single request result in the sliding window.

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dskow/go-api-gateway/internal/circuitbreaker"
-	"github.com/dskow/go-api-gateway/internal/config"
+	"github.com/dskow/gateway-core/internal/circuitbreaker"
+	"github.com/dskow/gateway-core/internal/config"
 )
 
 // Pre-serialized liveness response avoids json.Encoder allocation.
