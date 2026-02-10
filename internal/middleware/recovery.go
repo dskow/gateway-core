@@ -20,6 +20,7 @@ func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 						"stack", stack,
 						"method", r.Method,
 						"path", r.URL.Path,
+						"request_id", GetRequestID(r.Context()),
 					)
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)

@@ -35,7 +35,7 @@ func Logging(logger *slog.Logger) func(http.Handler) http.Handler {
 				"status", recorder.statusCode,
 				"latency_ms", time.Since(start).Milliseconds(),
 				"client_ip", r.RemoteAddr,
-				"request_id", r.Header.Get("X-Request-ID"),
+				"request_id", GetRequestID(r.Context()),
 			)
 		})
 	}

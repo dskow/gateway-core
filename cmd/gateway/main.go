@@ -17,6 +17,7 @@ import (
 	"github.com/dskow/go-api-gateway/internal/auth"
 	"github.com/dskow/go-api-gateway/internal/config"
 	"github.com/dskow/go-api-gateway/internal/health"
+	"github.com/dskow/go-api-gateway/internal/metrics"
 	"github.com/dskow/go-api-gateway/internal/middleware"
 	"github.com/dskow/go-api-gateway/internal/proxy"
 	"github.com/dskow/go-api-gateway/internal/ratelimit"
@@ -34,7 +35,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	for _, w := range config.Warnings {
+	for _, w := range cfg.Warnings {
 		logger.Warn("config warning", "message", w)
 	}
 
@@ -42,9 +43,16 @@ func main() {
 		"port", cfg.Server.Port,
 		"routes", len(cfg.Routes),
 		"auth_enabled", cfg.Auth.Enabled,
+		"metrics_enabled", cfg.Metrics.IsEnabled(),
+		"metrics_path", cfg.Metrics.Path,
 		"trusted_proxies", len(cfg.Server.TrustedProxies),
 		"max_body_bytes", cfg.Server.MaxBodyBytes,
 	)
+
+	// Initialize Prometheus metrics
+	if cfg.Metrics.IsEnabled() {
+		metrics.Init()
+	}
 
 	// Build the proxy router
 	router, err := proxy.New(cfg.Routes, logger)
@@ -67,7 +75,7 @@ func main() {
 	}
 
 	// Assemble middleware stack:
-	// Recovery → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
+	// Recovery → RequestID → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
 	var handler http.Handler = router
 	handler = auth.Middleware(cfg.Auth, routeRequiresAuth, logger)(handler)
 	handler = limiter.Middleware()(handler)
@@ -75,21 +83,40 @@ func main() {
 	handler = middleware.CORS(middleware.DefaultCORSConfig())(handler)
 	handler = middleware.Logging(logger)(handler)
 	handler = middleware.SecurityHeaders()(handler)
+	handler = middleware.RequestID(handler)
 	handler = middleware.Recovery(logger)(handler)
 
-	// Register health check routes on a separate mux,
+	// Register health check and metrics routes on a separate mux,
 	// then combine with the main handler
 	mux := http.NewServeMux()
 	healthHandler := health.New(cfg.Routes, logger)
 	healthHandler.RegisterRoutes(mux)
 
-	// Combine: health endpoints bypass the middleware stack
+	metricsPath := cfg.Metrics.Path
+	if cfg.Metrics.IsEnabled() {
+		mux.Handle(metricsPath, metrics.Handler())
+		logger.Info("metrics endpoint registered", "path", metricsPath)
+	}
+
+	// Combine: health and metrics endpoints bypass the middleware stack
 	combined := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/health") || strings.HasPrefix(r.URL.Path, "/ready") {
+		if strings.HasPrefix(r.URL.Path, "/health") ||
+			strings.HasPrefix(r.URL.Path, "/ready") ||
+			(cfg.Metrics.IsEnabled() && r.URL.Path == metricsPath) {
 			mux.ServeHTTP(w, r)
 			return
 		}
 		handler.ServeHTTP(w, r)
+	})
+
+	// Initialize config reloader
+	reloader := config.NewReloader(*configPath, cfg, logger)
+	reloader.Start()
+	defer reloader.Stop()
+
+	// Register reload callbacks for components that support hot-reload
+	reloader.OnReload(func(newCfg *config.Config) {
+		limiter.UpdateConfig(newCfg.RateLimit, newCfg.Routes)
 	})
 
 	srv := &http.Server{

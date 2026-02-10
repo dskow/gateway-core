@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,6 +26,24 @@ func main() {
 	if n := os.Getenv("SERVICE_NAME"); n != "" {
 		*name = n
 	}
+
+	// /__status/{code} returns an arbitrary HTTP status code.
+	// Useful for testing error handling, retries, and metrics.
+	// Example: GET /__status/503 → 503 Service Unavailable
+	http.HandleFunc("/__status/", func(w http.ResponseWriter, r *http.Request) {
+		codeStr := strings.TrimPrefix(r.URL.Path, "/__status/")
+		code, err := strconv.Atoi(codeStr)
+		if err != nil || code < 100 || code > 599 {
+			code = 500
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"service":        *name,
+			"requested_code": code,
+			"message":        http.StatusText(code),
+		})
+	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]interface{}{

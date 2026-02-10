@@ -62,6 +62,7 @@ func TestCORS_Headers(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -76,6 +77,22 @@ func TestCORS_Headers(t *testing.T) {
 	}
 }
 
+func TestCORS_NoHeadersWithoutOrigin(t *testing.T) {
+	cfg := DefaultCORSConfig()
+	handler := CORS(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// No Origin header — CORS headers should be absent.
+	req := httptest.NewRequest("GET", "/test", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("CORS headers should not be set without Origin header")
+	}
+}
+
 func TestCORS_OptionsRequest(t *testing.T) {
 	cfg := DefaultCORSConfig()
 	handler := CORS(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +100,7 @@ func TestCORS_OptionsRequest(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest("OPTIONS", "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -103,6 +121,7 @@ func TestCORS_CustomConfig(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

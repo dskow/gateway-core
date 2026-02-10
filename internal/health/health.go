@@ -8,15 +8,28 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/dskow/go-api-gateway/internal/config"
 )
 
+// Pre-serialized liveness response avoids json.Encoder allocation.
+var livenessBody = []byte(`{"status":"ok"}` + "\n")
+
+const readinessCacheTTL = 5 * time.Second
+
 // Handler provides /health and /ready endpoints.
 type Handler struct {
 	routes []config.RouteConfig
 	logger *slog.Logger
+
+	// Cached readiness result to avoid TCP-dialling every backend on
+	// every /ready poll. Protected by cacheMu.
+	cacheMu      sync.RWMutex
+	cachedResult []byte
+	cachedStatus int
+	cachedAt     time.Time
 }
 
 // New creates a new health check Handler.
@@ -33,60 +46,96 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 func (h *Handler) liveness(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok",
-	})
+	w.Write(livenessBody)
 }
 
 func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
+	// Serve from cache if fresh.
+	h.cacheMu.RLock()
+	if h.cachedResult != nil && time.Since(h.cachedAt) < readinessCacheTTL {
+		body := h.cachedResult
+		status := h.cachedStatus
+		h.cacheMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write(body)
+		return
+	}
+	h.cacheMu.RUnlock()
+
+	// Dial all backends concurrently.
+	type dialResult struct {
+		prefix string
+		status string
+		ok     bool
+	}
+
+	ch := make(chan dialResult, len(h.routes))
+	for _, route := range h.routes {
+		go func(route config.RouteConfig) {
+			u, err := url.Parse(route.Backend)
+			if err != nil {
+				ch <- dialResult{prefix: route.PathPrefix, status: "invalid URL", ok: false}
+				return
+			}
+
+			host := u.Host
+			if !hasPort(host) {
+				switch u.Scheme {
+				case "https":
+					host += ":443"
+				default:
+					host += ":80"
+				}
+			}
+
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", host)
+			cancel()
+
+			if err != nil {
+				h.logger.Warn("backend unreachable", "route", route.PathPrefix, "backend", route.Backend, "error", err)
+				ch <- dialResult{prefix: route.PathPrefix, status: "unreachable", ok: false}
+				return
+			}
+			conn.Close()
+			ch <- dialResult{prefix: route.PathPrefix, status: "ok", ok: true}
+		}(route)
+	}
+
 	allReady := true
 	results := make(map[string]string, len(h.routes))
-
-	for _, route := range h.routes {
-		u, err := url.Parse(route.Backend)
-		if err != nil {
-			results[route.PathPrefix] = "invalid URL"
+	for range h.routes {
+		res := <-ch
+		results[res.prefix] = res.status
+		if !res.ok {
 			allReady = false
-			continue
-		}
-
-		host := u.Host
-		if !hasPort(host) {
-			switch u.Scheme {
-			case "https":
-				host += ":443"
-			default:
-				host += ":80"
-			}
-		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", host)
-		cancel()
-
-		if err != nil {
-			results[route.PathPrefix] = "unreachable"
-			allReady = false
-			h.logger.Warn("backend unreachable", "route", route.PathPrefix, "backend", route.Backend, "error", err)
-		} else {
-			conn.Close()
-			results[route.PathPrefix] = "ok"
 		}
 	}
 
-	status := http.StatusOK
+	httpStatus := http.StatusOK
 	statusStr := "ready"
 	if !allReady {
-		status = http.StatusServiceUnavailable
+		httpStatus = http.StatusServiceUnavailable
 		statusStr = "not ready"
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	body, _ := json.Marshal(map[string]interface{}{
 		"status":   statusStr,
 		"backends": results,
 	})
+	body = append(body, '\n')
+
+	// Cache the result.
+	h.cacheMu.Lock()
+	h.cachedResult = body
+	h.cachedStatus = httpStatus
+	h.cachedAt = time.Now()
+	h.cacheMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+	w.Write(body)
 }
 
 func hasPort(host string) bool {

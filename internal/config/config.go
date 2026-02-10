@@ -16,9 +16,30 @@ import (
 // Config is the top-level gateway configuration.
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
+	Metrics   MetricsConfig   `yaml:"metrics"`
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
 	Auth      AuthConfig      `yaml:"auth"`
 	Routes    []RouteConfig   `yaml:"routes"`
+
+	// Warnings holds non-fatal config issues detected during loading.
+	// Stored on the Config itself (not a package-level var) so it is
+	// safe to call Load concurrently from the hot-reload goroutine.
+	Warnings []string `yaml:"-"`
+}
+
+// MetricsConfig holds Prometheus metrics endpoint settings.
+// Enabled defaults to true; set to false to disable metrics.
+type MetricsConfig struct {
+	Enabled *bool  `yaml:"enabled"`
+	Path    string `yaml:"path"`
+}
+
+// IsEnabled returns whether metrics are enabled (defaults to true).
+func (m MetricsConfig) IsEnabled() bool {
+	if m.Enabled == nil {
+		return true
+	}
+	return *m.Enabled
 }
 
 // ServerConfig holds HTTP server settings.
@@ -81,11 +102,9 @@ func expandEnvVars(s string) string {
 	})
 }
 
-// Warnings collects non-fatal config issues.
-var Warnings []string
-
 // Load reads and parses a YAML configuration file, applies environment
 // variable substitution, sets defaults, and validates the result.
+// Warnings are stored on cfg.Warnings (goroutine-safe, no package-level state).
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -105,7 +124,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
-	Warnings = collectWarnings(&cfg)
+	cfg.Warnings = collectWarnings(&cfg)
 
 	return &cfg, nil
 }
@@ -125,12 +144,15 @@ func LoadFromBytes(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
-	Warnings = collectWarnings(&cfg)
+	cfg.Warnings = collectWarnings(&cfg)
 
 	return &cfg, nil
 }
 
 func applyDefaults(cfg *Config) {
+	if cfg.Metrics.Path == "" {
+		cfg.Metrics.Path = "/metrics"
+	}
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 8080
 	}

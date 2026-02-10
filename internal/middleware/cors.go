@@ -31,10 +31,15 @@ func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", origins)
-			w.Header().Set("Access-Control-Allow-Methods", methods)
-			w.Header().Set("Access-Control-Allow-Headers", headers)
-			w.Header().Set("Access-Control-Max-Age", cfg.MaxAge)
+			// Only set CORS headers when the request includes an Origin
+			// header (browser cross-origin request). Non-browser clients
+			// (curl, backend services) skip the overhead entirely.
+			if r.Header.Get("Origin") != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origins)
+				w.Header().Set("Access-Control-Allow-Methods", methods)
+				w.Header().Set("Access-Control-Allow-Headers", headers)
+				w.Header().Set("Access-Control-Max-Age", cfg.MaxAge)
+			}
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dskow/go-api-gateway/internal/config"
+	"github.com/dskow/go-api-gateway/internal/metrics"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -40,6 +41,7 @@ func Middleware(cfg config.AuthConfig, routeRequiresAuth func(path string) bool,
 
 			tokenStr, ok := extractBearerToken(r)
 			if !ok {
+				metrics.AuthFailures.WithLabelValues("missing_token").Inc()
 				writeAuthError(w, http.StatusUnauthorized, "missing or malformed Authorization header")
 				return
 			}
@@ -48,8 +50,10 @@ func Middleware(cfg config.AuthConfig, routeRequiresAuth func(path string) bool,
 			if err != nil {
 				logger.Warn("auth failure", "error", err, "path", r.URL.Path)
 				if isScopeError(err) {
+					metrics.AuthFailures.WithLabelValues("insufficient_scope").Inc()
 					writeAuthError(w, http.StatusForbidden, err.Error())
 				} else {
+					metrics.AuthFailures.WithLabelValues("invalid_token").Inc()
 					writeAuthError(w, http.StatusUnauthorized, err.Error())
 				}
 				return
@@ -154,9 +158,17 @@ func isScopeError(err error) bool {
 	return errors.As(err, &se)
 }
 
+// Pre-serialized auth error body for the most common rejection (missing token).
+var errBodyMissingAuth = []byte(`{"error":"Unauthorized","message":"missing or malformed Authorization header"}` + "\n")
+
 func writeAuthError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+
+	if status == http.StatusUnauthorized && message == "missing or malformed Authorization header" {
+		w.Write(errBodyMissingAuth)
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"error":   http.StatusText(status),
 		"message": message,

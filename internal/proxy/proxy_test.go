@@ -182,52 +182,8 @@ func TestRouter_HeaderInjection(t *testing.T) {
 	}
 }
 
-func TestRouter_RequestIDGenerated(t *testing.T) {
-	backend := httptest.NewServer(echoHandler())
-	defer backend.Close()
-
-	routes := []config.RouteConfig{
-		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
-	}
-	logger := slog.Default()
-	router, err := New(routes, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest("GET", "/api/test", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	reqID := rec.Header().Get("X-Request-ID")
-	if reqID == "" {
-		t.Error("expected X-Request-ID header to be set")
-	}
-}
-
-func TestRouter_RequestIDPreserved(t *testing.T) {
-	backend := httptest.NewServer(echoHandler())
-	defer backend.Close()
-
-	routes := []config.RouteConfig{
-		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
-	}
-	logger := slog.Default()
-	router, err := New(routes, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := httptest.NewRequest("GET", "/api/test", nil)
-	req.Header.Set("X-Request-ID", "my-custom-id")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	reqID := rec.Header().Get("X-Request-ID")
-	if reqID != "my-custom-id" {
-		t.Errorf("expected preserved X-Request-ID, got %q", reqID)
-	}
-}
+// Note: X-Request-ID generation and preservation tests moved to
+// middleware/requestid_test.go (RequestID middleware now handles this).
 
 func TestRouter_XForwardedFor(t *testing.T) {
 	var receivedXFF string
@@ -290,53 +246,10 @@ func TestRouter_InvalidBackendURL(t *testing.T) {
 	}
 }
 
-func TestNewUUID(t *testing.T) {
-	id := newUUID()
-	if len(id) != 36 {
-		t.Errorf("expected UUID length 36, got %d: %q", len(id), id)
-	}
-	// Check format: 8-4-4-4-12
-	parts := []int{8, 4, 4, 4, 12}
-	idx := 0
-	for i, p := range parts {
-		end := idx + p
-		if i < len(parts)-1 {
-			if id[end] != '-' {
-				t.Errorf("expected dash at position %d", end)
-			}
-			end++ // skip dash
-		}
-		idx = end
-	}
-}
+// Note: newUUID test moved to middleware/requestid_test.go.
 
-func TestMatchesPrefix(t *testing.T) {
-	tests := []struct {
-		path   string
-		prefix string
-		want   bool
-	}{
-		{"/api/users/123", "/api/users", true},
-		{"/api/users", "/api/users", true},
-		{"/api/", "/api/", true},
-		{"/api/test", "/api/", true},
-		{"/api.evil.com/steal", "/api", false},
-		{"/api-extended", "/api", false},
-		{"/apiary", "/api", false},
-		{"/api", "/api", true},
-		{"/api/test", "/api", true},
-		{"/other", "/api", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path+"_vs_"+tt.prefix, func(t *testing.T) {
-			got := matchesPrefix(tt.path, tt.prefix)
-			if got != tt.want {
-				t.Errorf("matchesPrefix(%q, %q) = %v, want %v", tt.path, tt.prefix, got, tt.want)
-			}
-		})
-	}
-}
+// Note: matchesPrefix tests moved to internal/routing/match_test.go
+// since the function was extracted into the shared routing package.
 
 func TestRouter_PathBoundaryEnforcement(t *testing.T) {
 	backend := httptest.NewServer(echoHandler())

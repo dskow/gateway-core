@@ -4,6 +4,10 @@ server:
   write_timeout: 15s
   shutdown_timeout: 10s
 
+metrics:
+  enabled: true
+  path: "/metrics"
+
 rate_limit:
   requests_per_second: 100
   burst_size: 50

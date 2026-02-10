@@ -68,31 +68,52 @@ server:
 
 ---
 
-## Phase 2 — Observability & Metrics (PLANNED)
+## Phase 2 — Observability & Metrics (COMPLETE)
 
-Add Prometheus metrics and structured tracing for production visibility.
+Added Prometheus metrics, per-route labels, request ID propagation, and config hot-reload.
 
 ### 1. Prometheus Metrics Endpoint
 
-- Add `github.com/prometheus/client_golang` dependency
-- Expose `/metrics` endpoint (bypasses auth and rate limiting, like health endpoints)
-- Instrument: request count, latency histogram, active connections, rate limit hits, auth failures, error rates by status code
+**Solution:** Added `github.com/prometheus/client_golang` dependency. Centralized metrics registry in `internal/metrics/metrics.go` with 7 collectors: `gateway_requests_total` (counter by route/method/status), `gateway_request_duration_seconds` (histogram by route/method), `gateway_active_connections` (gauge), `gateway_rate_limit_hits_total` (counter by route), `gateway_auth_failures_total` (counter by reason), `gateway_backend_errors_total` (counter by route/backend/status), `gateway_retries_total` (counter by route/backend). `/metrics` endpoint bypasses auth and rate limiting like health endpoints.
+
+**Files:** `internal/metrics/metrics.go`, `cmd/gateway/main.go`
 
 ### 2. Per-Route Metrics Labels
 
-- Label metrics with route path prefix and backend for per-service dashboards
-- Track retry counts and backend error rates per route
+**Solution:** All metrics are labeled with route path prefix and backend URL where applicable. Request count, latency, retries, and backend errors are tracked per-route for per-service dashboards.
+
+**Files:** `internal/proxy/proxy.go`, `internal/ratelimit/ratelimit.go`, `internal/auth/auth.go`
 
 ### 3. Request ID Propagation
 
-- Ensure `X-Request-ID` is logged in every middleware layer for end-to-end tracing
-- Add trace/span ID support for OpenTelemetry integration readiness
+**Solution:** Extracted request ID generation from proxy into a dedicated `RequestID` middleware that runs early in the chain. The ID is stored in the request context via `middleware.GetRequestID(ctx)` so all downstream middleware (logging, recovery) can access it. `X-Request-ID` is set on both response and request headers for backend propagation.
 
-### 4. Config Hot-Reload Signal
+**Files:** `internal/middleware/requestid.go`, `internal/middleware/logging.go`, `internal/middleware/recovery.go`, `internal/proxy/proxy.go`
 
-- Watch for SIGHUP and reload config without downtime
-- Validate new config before swapping — reject invalid configs
-- Log config changes with before/after diff
+### 4. Config Hot-Reload
+
+**Solution:** Added `config.Reloader` with dual reload triggers: fsnotify file watcher (cross-platform, with 300ms debounce) and SIGHUP signal handler (Unix only, no-op on Windows via build tags). Validates new config before swapping — invalid configs are rejected and the old config is preserved. Logs a diff summary of changed fields. Components register callbacks to receive new config (rate limiter `UpdateConfig` clears existing limiters so new rates apply immediately).
+
+**Files:** `internal/config/reload.go`, `internal/config/reload_unix.go`, `internal/config/reload_windows.go`, `internal/ratelimit/ratelimit.go`
+
+### Middleware Chain (post-Phase 2)
+
+```
+Recovery → RequestID → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
+```
+
+### Config Additions (backward-compatible)
+
+```yaml
+metrics:
+  enabled: true      # optional, default: true
+  path: "/metrics"   # optional, default: "/metrics"
+```
+
+### Dependencies Added
+
+- `github.com/prometheus/client_golang` v1.19.1 — Prometheus instrumentation
+- `github.com/fsnotify/fsnotify` v1.7.0 — Cross-platform file system notifications
 
 ---
 
@@ -193,7 +214,7 @@ Raise test quality and automate the release pipeline.
 | Phase | Focus | Status | Dependencies |
 |-------|-------|--------|-------------|
 | 1 | Security Hardening | **Complete** | None |
-| 2 | Observability & Metrics | Planned | `prometheus/client_golang` |
+| 2 | Observability & Metrics | **Complete** | `prometheus/client_golang`, `fsnotify/fsnotify` |
 | 3 | Resilience & Reliability | Planned | Phase 2 (metrics for circuit breaker) |
 | 4 | Operational Hardening | Planned | Phase 1 (TLS needs security headers) |
 | 5 | Testing & CI/CD | Planned | Phase 2-3 (integration tests need metrics + circuit breaker) |

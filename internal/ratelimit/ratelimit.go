@@ -3,16 +3,17 @@
 package ratelimit
 
 import (
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dskow/go-api-gateway/internal/config"
+	"github.com/dskow/go-api-gateway/internal/metrics"
+	"github.com/dskow/go-api-gateway/internal/routing"
 	"golang.org/x/time/rate"
 )
 
@@ -21,11 +22,20 @@ type client struct {
 	lastSeen time.Time
 }
 
+// clientKey avoids fmt.Sprintf allocation in the hot path. The composite
+// key encodes IP, rate, and burst so different route overrides get
+// separate buckets.
+type clientKey struct {
+	ip    string
+	rate  rate.Limit
+	burst int
+}
+
 // Limiter tracks per-client rate limiters and performs periodic cleanup
 // of stale entries.
 type Limiter struct {
-	mu           sync.Mutex
-	clients      map[string]*client
+	mu           sync.RWMutex
+	clients      map[clientKey]*client
 	rate         rate.Limit
 	burst        int
 	routes       []config.RouteConfig
@@ -34,6 +44,9 @@ type Limiter struct {
 	stopCh       chan struct{}
 }
 
+// Pre-serialized 429 JSON body avoids json.Encoder allocation per rejection.
+var errBodyTooManyRequests = []byte(`{"error":"Too Many Requests","message":"rate limit exceeded, retry later"}` + "\n")
+
 // New creates a new Limiter with the given global rate limit settings and
 // route-level overrides. It starts a background goroutine that cleans up
 // stale client entries every minute. trustedProxies is a list of CIDR strings
@@ -41,7 +54,7 @@ type Limiter struct {
 func New(cfg config.RateLimitConfig, routes []config.RouteConfig, trustedProxies []string, logger *slog.Logger) *Limiter {
 	cidrs := parseCIDRs(trustedProxies, logger)
 	l := &Limiter{
-		clients:      make(map[string]*client),
+		clients:      make(map[clientKey]*client),
 		rate:         rate.Limit(cfg.RequestsPerSecond),
 		burst:        cfg.BurstSize,
 		routes:       routes,
@@ -71,24 +84,39 @@ func (l *Limiter) Stop() {
 	close(l.stopCh)
 }
 
+// UpdateConfig hot-reloads the global rate limit settings and route overrides.
+// Existing per-client limiters are cleared so new limits take effect immediately.
+func (l *Limiter) UpdateConfig(cfg config.RateLimitConfig, routes []config.RouteConfig) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.rate = rate.Limit(cfg.RequestsPerSecond)
+	l.burst = cfg.BurstSize
+	l.routes = routes
+
+	// Clear existing limiters so new rates apply on next request.
+	l.clients = make(map[clientKey]*client)
+}
+
 // Middleware returns an HTTP middleware that enforces rate limits.
 func (l *Limiter) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := l.clientIP(r)
-			rateLimit, burst := l.limitsForPath(r.URL.Path)
+
+			// Single route scan returns rate, burst, and prefix — avoids
+			// the old double-iteration of limitsForPath + routeForPath.
+			rateLimit, burst, routePrefix := l.limitsForPath(r.URL.Path)
 
 			limiter := l.getLimiter(ip, rateLimit, burst)
 			if !limiter.Allow() {
 				l.logger.Warn("rate limit exceeded", "client_ip", ip, "path", r.URL.Path)
-				retryAfter := fmt.Sprintf("%.0f", 1.0/float64(rateLimit))
+				metrics.RateLimitHits.WithLabelValues(routePrefix).Inc()
+				retryAfter := strconv.FormatFloat(1.0/float64(rateLimit), 'f', 0, 64)
 				w.Header().Set("Retry-After", retryAfter)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusTooManyRequests)
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":   "Too Many Requests",
-					"message": "rate limit exceeded, retry later",
-				})
+				w.Write(errBodyTooManyRequests)
 				return
 			}
 
@@ -139,44 +167,60 @@ func extractIP(remoteAddr string) string {
 	return host
 }
 
-// pathMatchesPrefix checks if path matches prefix with boundary enforcement.
-// The path must either equal the prefix, the prefix must end with "/",
-// or the character after the prefix in path must be "/".
-func pathMatchesPrefix(path, prefix string) bool {
-	if !strings.HasPrefix(path, prefix) {
-		return false
-	}
-	if len(path) == len(prefix) {
-		return true
-	}
-	if prefix[len(prefix)-1] == '/' {
-		return true
-	}
-	return path[len(prefix)] == '/'
-}
-
-func (l *Limiter) limitsForPath(path string) (rate.Limit, int) {
-	var bestMatch *config.RateLimitConfig
+// limitsForPath returns the rate limit, burst, and matching route prefix
+// for the given path. This combines the old limitsForPath + routeForPath
+// into a single route scan to avoid iterating routes twice on rate-limit hits.
+func (l *Limiter) limitsForPath(path string) (rate.Limit, int, string) {
+	var bestOverride *config.RateLimitConfig
 	bestLen := 0
+	bestPrefix := "unknown"
+
 	for _, route := range l.routes {
-		if route.RateOverride != nil && pathMatchesPrefix(path, route.PathPrefix) {
-			if len(route.PathPrefix) > bestLen {
-				bestLen = len(route.PathPrefix)
-				bestMatch = route.RateOverride
+		if routing.MatchesPrefix(path, route.PathPrefix) && len(route.PathPrefix) > bestLen {
+			bestLen = len(route.PathPrefix)
+			bestPrefix = route.PathPrefix
+			if route.RateOverride != nil {
+				bestOverride = route.RateOverride
 			}
 		}
 	}
-	if bestMatch != nil {
-		return rate.Limit(bestMatch.RequestsPerSecond), bestMatch.BurstSize
+
+	if bestOverride != nil {
+		return rate.Limit(bestOverride.RequestsPerSecond), bestOverride.BurstSize, bestPrefix
 	}
-	return l.rate, l.burst
+	return l.rate, l.burst, bestPrefix
 }
 
+// getLimiter returns or creates a rate limiter for the given client key.
+// Uses RWMutex: read-lock for existing clients (common path), write-lock
+// only for new insertions. rate.Limiter is internally goroutine-safe so
+// Allow() does not need to be called under our lock.
 func (l *Limiter) getLimiter(ip string, r rate.Limit, burst int) *rate.Limiter {
-	key := fmt.Sprintf("%s:%v:%d", ip, r, burst)
+	key := clientKey{ip: ip, rate: r, burst: burst}
+
+	// Fast path: read-lock for existing clients (the common case).
+	l.mu.RLock()
+	if c, exists := l.clients[key]; exists {
+		// Avoid time.Now() on every hit — only update lastSeen if stale.
+		// The cleanup threshold is 3 minutes; refreshing once per minute
+		// is sufficient to prevent eviction.
+		if time.Since(c.lastSeen) > 1*time.Minute {
+			l.mu.RUnlock()
+			l.mu.Lock()
+			c.lastSeen = time.Now()
+			l.mu.Unlock()
+		} else {
+			l.mu.RUnlock()
+		}
+		return c.limiter
+	}
+	l.mu.RUnlock()
+
+	// Slow path: need write lock to insert new client.
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// Double-check after acquiring write lock.
 	if c, exists := l.clients[key]; exists {
 		c.lastSeen = time.Now()
 		return c.limiter

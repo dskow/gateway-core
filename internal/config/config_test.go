@@ -137,13 +137,13 @@ routes:
   - path_prefix: "/api"
     backend: "http://localhost:3000"
 `)
-	_, err := LoadFromBytes(yaml)
+	cfg, err := LoadFromBytes(yaml)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	found := false
-	for _, w := range Warnings {
+	for _, w := range cfg.Warnings {
 		if strings.Contains(w, "unresolved environment variable") {
 			found = true
 			break

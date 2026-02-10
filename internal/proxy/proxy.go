@@ -3,8 +3,8 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,10 +12,13 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dskow/go-api-gateway/internal/config"
+	"github.com/dskow/go-api-gateway/internal/metrics"
+	"github.com/dskow/go-api-gateway/internal/routing"
 )
 
 // Router matches incoming requests to configured routes and proxies
@@ -62,12 +65,6 @@ func New(routes []config.RouteConfig, logger *slog.Logger) (*Router, error) {
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	requestID := r.Header.Get("X-Request-ID")
-	if requestID == "" {
-		requestID = newUUID()
-	}
-	w.Header().Set("X-Request-ID", requestID)
-
 	route, ok := rt.matchRoute(r.URL.Path)
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "no matching route")
@@ -79,9 +76,10 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy := rt.proxies[route.PathPrefix]
+	metrics.ActiveConnections.Inc()
+	defer metrics.ActiveConnections.Dec()
 
-	r.Header.Set("X-Request-ID", requestID)
+	proxy := rt.proxies[route.PathPrefix]
 
 	for k, v := range route.Headers {
 		r.Header.Set(k, v)
@@ -100,6 +98,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		maxAttempts = 1
 	}
 
+	// Wrap the response writer to capture the status code for metrics.
+	recorder := &responseRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		ctx, cancel := context.WithTimeout(r.Context(), route.Timeout())
 		rWithCtx := r.WithContext(ctx)
@@ -107,30 +108,38 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		isFinal := attempt == maxAttempts
 
 		if isFinal {
-			// Final attempt writes directly to the client
-			proxy.ServeHTTP(w, rWithCtx)
+			// Final attempt: write directly to the real client.
+			// Set latency header via a wrapper so it's written BEFORE
+			// the reverse proxy calls WriteHeader on the response.
+			lw := &latencyWriter{ResponseWriter: recorder, start: start}
+			proxy.ServeHTTP(lw, rWithCtx)
 			cancel()
 			break
 		}
 
-		// Non-final attempts: capture response to check status
-		rec := &statusCapture{ResponseWriter: newDiscardWriter(), statusCode: http.StatusOK}
-		proxy.ServeHTTP(rec, rWithCtx)
+		// Non-final attempt: buffer the full response so we can either
+		// replay it on success or discard it and retry. This avoids the
+		// double-backend-hit that the old discard+re-send approach had.
+		buf := &responseBuffer{header: make(http.Header), statusCode: http.StatusOK}
+		proxy.ServeHTTP(buf, rWithCtx)
 		cancel()
 
-		if !isRetryable(rec.statusCode) {
-			// Success or non-retryable error — re-send to the real writer
-			ctx2, cancel2 := context.WithTimeout(r.Context(), route.Timeout())
-			proxy.ServeHTTP(w, r.WithContext(ctx2))
-			cancel2()
+		if !isRetryable(buf.statusCode) {
+			// Success or non-retryable error — replay buffered response
+			// to the real writer without hitting the backend again.
+			// Set latency header BEFORE replay calls WriteHeader.
+			w.Header().Set("X-Gateway-Latency", time.Since(start).String())
+			buf.replayTo(recorder)
 			break
 		}
+
+		metrics.RetryTotal.WithLabelValues(route.PathPrefix, route.Backend).Inc()
 
 		rt.logger.Warn("retrying request",
 			"path", originalPath,
 			"backend", route.Backend,
 			"attempt", attempt,
-			"status", rec.statusCode,
+			"status", buf.statusCode,
 		)
 
 		backoff := time.Duration(100*(1<<(attempt-1))) * time.Millisecond
@@ -138,32 +147,23 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	latency := time.Since(start)
-	w.Header().Set("X-Gateway-Latency", latency.String())
+
+	statusStr := strconv.Itoa(recorder.statusCode)
+	metrics.RequestsTotal.WithLabelValues(route.PathPrefix, r.Method, statusStr).Inc()
+	metrics.RequestDuration.WithLabelValues(route.PathPrefix, r.Method).Observe(latency.Seconds())
+
+	if recorder.statusCode >= 500 {
+		metrics.BackendErrors.WithLabelValues(route.PathPrefix, route.Backend, statusStr).Inc()
+	}
 }
 
 func (rt *Router) matchRoute(path string) (config.RouteConfig, bool) {
 	for _, route := range rt.routes {
-		if matchesPrefix(path, route.PathPrefix) {
+		if routing.MatchesPrefix(path, route.PathPrefix) {
 			return route, true
 		}
 	}
 	return config.RouteConfig{}, false
-}
-
-// matchesPrefix checks if path matches prefix with boundary enforcement.
-// The path must either equal the prefix, the prefix must end with "/",
-// or the character after the prefix in path must be "/".
-func matchesPrefix(path, prefix string) bool {
-	if !strings.HasPrefix(path, prefix) {
-		return false
-	}
-	if len(path) == len(prefix) {
-		return true
-	}
-	if prefix[len(prefix)-1] == '/' {
-		return true
-	}
-	return path[len(prefix)] == '/'
 }
 
 // MatchRoute exposes route matching for use by other packages (e.g., auth middleware).
@@ -186,43 +186,124 @@ func isRetryable(status int) bool {
 		status == http.StatusGatewayTimeout
 }
 
-func newUUID() string {
-	var uuid [16]byte
-	_, _ = rand.Read(uuid[:])
-	uuid[6] = (uuid[6] & 0x0f) | 0x40 // version 4
-	uuid[8] = (uuid[8] & 0x3f) | 0x80 // variant 2
-	return fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
+// Pre-serialized JSON error bodies avoid per-request json.Encoder allocations.
+var (
+	errBodyNotFound   = mustMarshalError(http.StatusNotFound, "no matching route")
+	errBodyBadGateway = mustMarshalError(http.StatusBadGateway, "upstream service unavailable")
+)
+
+func mustMarshalError(status int, message string) []byte {
+	b, _ := json.Marshal(map[string]interface{}{
+		"error":   http.StatusText(status),
+		"message": message,
+	})
+	return append(b, '\n')
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error":   http.StatusText(status),
-		"message": message,
-	})
+
+	// Use pre-serialized body for common error messages to avoid
+	// json.Encoder allocation on every error response.
+	switch {
+	case status == http.StatusNotFound && message == "no matching route":
+		w.Write(errBodyNotFound)
+	case status == http.StatusBadGateway && message == "upstream service unavailable":
+		w.Write(errBodyBadGateway)
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   http.StatusText(status),
+			"message": message,
+		})
+	}
 }
 
-// statusCapture captures only the status code; body is discarded.
-type statusCapture struct {
+// latencyWriter wraps an http.ResponseWriter and injects the
+// X-Gateway-Latency header just before the first WriteHeader call.
+// This ensures the header is set before the response is committed.
+type latencyWriter struct {
+	http.ResponseWriter
+	start   time.Time
+	written bool
+}
+
+func (lw *latencyWriter) WriteHeader(code int) {
+	if !lw.written {
+		lw.written = true
+		lw.ResponseWriter.Header().Set("X-Gateway-Latency", time.Since(lw.start).String())
+	}
+	lw.ResponseWriter.WriteHeader(code)
+}
+
+func (lw *latencyWriter) Write(b []byte) (int, error) {
+	if !lw.written {
+		lw.written = true
+		lw.ResponseWriter.Header().Set("X-Gateway-Latency", time.Since(lw.start).String())
+	}
+	return lw.ResponseWriter.Write(b)
+}
+
+// responseRecorder wraps http.ResponseWriter to capture the status code
+// while still writing to the real client. Used for metrics reporting.
+type responseRecorder struct {
 	http.ResponseWriter
 	statusCode int
+	written    bool
 }
 
-func (s *statusCapture) WriteHeader(code int) {
-	s.statusCode = code
-	s.ResponseWriter.WriteHeader(code)
+func (rr *responseRecorder) WriteHeader(code int) {
+	if !rr.written {
+		rr.statusCode = code
+		rr.written = true
+	}
+	rr.ResponseWriter.WriteHeader(code)
 }
 
-// discardWriter discards all output — used during non-final retry attempts.
-type discardWriter struct {
-	header http.Header
+func (rr *responseRecorder) Write(b []byte) (int, error) {
+	if !rr.written {
+		rr.statusCode = http.StatusOK
+		rr.written = true
+	}
+	return rr.ResponseWriter.Write(b)
 }
 
-func newDiscardWriter() *discardWriter {
-	return &discardWriter{header: make(http.Header)}
+// responseBuffer captures the full response (status, headers, body) in memory
+// so it can be replayed to the real client on a successful non-final retry
+// attempt. This replaces the old discard+re-send approach that hit the
+// backend twice on every successful request with retries enabled.
+type responseBuffer struct {
+	header     http.Header
+	body       bytes.Buffer
+	statusCode int
+	written    bool
 }
 
-func (d *discardWriter) Header() http.Header         { return d.header }
-func (d *discardWriter) Write(p []byte) (int, error)  { return len(p), nil }
-func (d *discardWriter) WriteHeader(_ int)            {}
+func (b *responseBuffer) Header() http.Header { return b.header }
+
+func (b *responseBuffer) WriteHeader(code int) {
+	if !b.written {
+		b.statusCode = code
+		b.written = true
+	}
+}
+
+func (b *responseBuffer) Write(p []byte) (int, error) {
+	if !b.written {
+		b.statusCode = http.StatusOK
+		b.written = true
+	}
+	return b.body.Write(p)
+}
+
+// replayTo copies the buffered response (headers, status, body) to a real
+// ResponseWriter. The recorder captures the status code for metrics.
+func (b *responseBuffer) replayTo(rr *responseRecorder) {
+	for k, vals := range b.header {
+		for _, v := range vals {
+			rr.Header().Add(k, v)
+		}
+	}
+	rr.WriteHeader(b.statusCode)
+	rr.Write(b.body.Bytes())
+}
