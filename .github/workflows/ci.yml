@@ -16,7 +16,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
       - run: go vet ./...
       - uses: dominikh/staticcheck-action@v1
         with:
@@ -29,7 +31,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
       - run: go build -o bin/gateway ./cmd/gateway
       - run: go build -o bin/echoserver ./cmd/echoserver
 
@@ -40,7 +44,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
       - run: go test ./... -v -cover -race -coverprofile=coverage.out
       - uses: actions/upload-artifact@v7
         with:
@@ -60,7 +66,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
       - name: Fuzz ${{ matrix.target.func }}
         run: go test ${{ matrix.target.pkg }} -fuzz=${{ matrix.target.func }} -fuzztime=30s
 
@@ -71,7 +79,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.22'
+          go-version: '1.25.x'
+          check-latest: true
+          cache: true
 
       - name: Start services
         run: |
@@ -105,3 +115,4 @@ jobs:
       - uses: actions/checkout@v6
       - name: Build Docker image
         run: docker build -t gateway-core:${{ github.sha }} .
+
