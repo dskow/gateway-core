@@ -78,11 +78,19 @@ def curl(method, path, token=None, headers=None, data=None, data_file=None, labe
 
 def check(ok, msg=""):
     global passed, failed
+    # Redact sensitive secrets from log messages before printing
+    if msg:
+        msg_str = str(msg)
+        # Avoid logging the raw JWT secret in clear text
+        if SECRET:
+            msg_str = msg_str.replace(SECRET, "***")
+    else:
+        msg_str = ""
     if ok:
-        print(f"  PASS{': ' + msg if msg else ''}")
+        print(f"  PASS{': ' + msg_str if msg_str else ''}")
         passed += 1
     else:
-        print(f"  FAIL{': ' + msg if msg else ''}")
+        print(f"  FAIL{': ' + msg_str if msg_str else ''}")
         failed += 1
     return ok
 
