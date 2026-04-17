@@ -38,6 +38,15 @@ func (r *Reloader) Current() *Config {
 	return r.current
 }
 
+// SetPath updates the watched config file path. Intended for callers that
+// construct a Reloader before the final path is known (e.g. Gateway wiring
+// that accepts an in-memory Config in tests). Must be called before Start.
+func (r *Reloader) SetPath(path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.path = path
+}
+
 // OnReload registers a callback that is invoked with the new config
 // after a successful reload.
 func (r *Reloader) OnReload(fn func(*Config)) {
