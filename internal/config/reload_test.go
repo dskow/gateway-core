@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -262,5 +263,179 @@ func TestReloader_LogChanges(t *testing.T) {
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "rate limit config changed") {
 		t.Error("expected rate limit change to be logged")
+	}
+}
+
+// countingRecorder captures rollback counter increments for assertions.
+type countingRecorder struct {
+	byReason map[string]int
+}
+
+func (c *countingRecorder) IncRollback(reason string) {
+	if c.byReason == nil {
+		c.byReason = map[string]int{}
+	}
+	c.byReason[reason]++
+}
+
+// DP-001: when an observer returns an error, the Reloader's Current() must
+// revert to the pre-reload value and the rollbacks counter must increment.
+func TestReloader_ObserverErrorRollsBack(t *testing.T) {
+	logger, _ := newTestLogger()
+	dir := t.TempDir()
+	path := writeTestConfig(t, dir, validConfig)
+	initial, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	r := NewReloader(path, initial, logger)
+	rec := &countingRecorder{}
+	r.SetRollbackRecorder(rec)
+
+	var observed struct {
+		sawOld *Config
+		sawNew *Config
+	}
+	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+		observed.sawOld = old
+		observed.sawNew = new
+		return errors.New("observer refuses this reload")
+	}))
+
+	if err := os.WriteFile(path, []byte(validConfigUpdated), 0644); err != nil {
+		t.Fatalf("write updated: %v", err)
+	}
+	if r.Reload() {
+		t.Fatal("Reload must return false when an observer errors")
+	}
+
+	cfg := r.Current()
+	if cfg.RateLimit.RequestsPerSecond != 100 {
+		t.Fatalf("Current() must hold the pre-reload config, got rps=%v",
+			cfg.RateLimit.RequestsPerSecond)
+	}
+	if observed.sawOld == nil || observed.sawNew == nil {
+		t.Fatal("observer was never invoked")
+	}
+	if observed.sawOld.RateLimit.RequestsPerSecond != 100 ||
+		observed.sawNew.RateLimit.RequestsPerSecond != 200 {
+		t.Fatal("observer received wrong old/new pair")
+	}
+	if rec.byReason["observer_error"] != 1 {
+		t.Fatalf("expected 1 observer_error rollback, counter=%v", rec.byReason)
+	}
+}
+
+// DP-001: a panicking observer must be recovered, counted as a rollback, and
+// leave Current() unchanged — the Reloader may not crash the process.
+func TestReloader_ObserverPanicRollsBack(t *testing.T) {
+	logger, _ := newTestLogger()
+	dir := t.TempDir()
+	path := writeTestConfig(t, dir, validConfig)
+	initial, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	r := NewReloader(path, initial, logger)
+	rec := &countingRecorder{}
+	r.SetRollbackRecorder(rec)
+
+	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+		panic("observer went boom")
+	}))
+
+	if err := os.WriteFile(path, []byte(validConfigUpdated), 0644); err != nil {
+		t.Fatalf("write updated: %v", err)
+	}
+	if r.Reload() {
+		t.Fatal("Reload must return false when an observer panics")
+	}
+	if r.Current().RateLimit.RequestsPerSecond != 100 {
+		t.Fatal("Current() must hold the pre-reload config after panic")
+	}
+	if rec.byReason["observer_panic"] != 1 {
+		t.Fatalf("expected 1 observer_panic rollback, counter=%v", rec.byReason)
+	}
+}
+
+// DP-001: observers are invoked in registration order and a later failure
+// does NOT revert earlier observers' side effects — only the pointer. This
+// test pins the documented "observers must be idempotent" contract.
+func TestReloader_ObserverOrderAndPartialApply(t *testing.T) {
+	logger, _ := newTestLogger()
+	dir := t.TempDir()
+	path := writeTestConfig(t, dir, validConfig)
+	initial, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	r := NewReloader(path, initial, logger)
+	r.SetRollbackRecorder(&countingRecorder{})
+
+	var order []string
+	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+		order = append(order, "a")
+		return nil
+	}))
+	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+		order = append(order, "b")
+		return errors.New("reject at b")
+	}))
+	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+		order = append(order, "c")
+		return nil
+	}))
+
+	if err := os.WriteFile(path, []byte(validConfigUpdated), 0644); err != nil {
+		t.Fatalf("write updated: %v", err)
+	}
+	r.Reload()
+
+	if got := strings.Join(order, ","); got != "a,b" {
+		t.Fatalf("observer invocation order = %q, want a,b (c must be skipped)", got)
+	}
+	if r.Current().RateLimit.RequestsPerSecond != 100 {
+		t.Fatal("Current() must revert after partial apply")
+	}
+}
+
+// DP-001: legacy OnReload callbacks still run, but only after all observers
+// accept. If an observer rejects, legacy callbacks must NOT fire.
+func TestReloader_LegacyCallbacksSkippedOnRollback(t *testing.T) {
+	logger, _ := newTestLogger()
+	dir := t.TempDir()
+	path := writeTestConfig(t, dir, validConfig)
+	initial, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	r := NewReloader(path, initial, logger)
+	r.SetRollbackRecorder(&countingRecorder{})
+
+	var legacyCalls int
+	r.OnReload(func(*Config) { legacyCalls++ })
+	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+		return errors.New("no")
+	}))
+
+	if err := os.WriteFile(path, []byte(validConfigUpdated), 0644); err != nil {
+		t.Fatalf("write updated: %v", err)
+	}
+	r.Reload()
+
+	if legacyCalls != 0 {
+		t.Fatalf("legacy callbacks fired on rollback: %d calls", legacyCalls)
+	}
+
+	// And a subsequent successful reload must invoke them.
+	r = NewReloader(path, initial, logger)
+	r.OnReload(func(*Config) { legacyCalls++ })
+	r.Reload()
+	if legacyCalls != 1 {
+		t.Fatalf("legacy callback should have fired once on success, got %d", legacyCalls)
 	}
 }

@@ -182,10 +182,10 @@ func NewGateway(ctx context.Context, cfg *config.Config, logger *slog.Logger, op
 	}
 
 	// Reloader is constructed before admin so admin can reference it.
-	// DP-001 wires SetRollbackRecorder and RegisterObserver on top of this
-	// construction; for DP-003 alone we use the legacy fire-and-forget
-	// callback below.
 	g.Reloader = config.NewReloader("", cfg, logger)
+	if g.Metrics != nil {
+		g.Reloader.SetRollbackRecorder(g.Metrics)
+	}
 
 	if cfg.Admin.Enabled {
 		g.Admin = admin.New(g.Reloader, g.Limiter, g.Breakers, cfg.Routes, cfg.Admin.IPAllowlist, logger)
@@ -217,29 +217,11 @@ func NewGateway(ctx context.Context, cfg *config.Config, logger *slog.Logger, op
 		handler.ServeHTTP(w, r)
 	})
 
-	// Subscribe the limiter and breakers to config reloads. The callback
-	// is idempotent — it overwrites limiter rates, breaker thresholds,
-	// and the routes atom unconditionally. DP-001 upgrades this to a
-	// rollback-capable ConfigObserver once that interface lands.
-	g.Reloader.OnReload(func(newCfg *config.Config) {
-		g.Limiter.UpdateConfig(newCfg.RateLimit, newCfg.Routes)
-		newCbCfg := circuitbreaker.Config{
-			WindowSize:       newCfg.CircuitBreaker.WindowSize,
-			FailureThreshold: newCfg.CircuitBreaker.FailureThreshold,
-			ResetTimeout:     newCfg.CircuitBreaker.ResetTimeout,
-			HalfOpenMax:      newCfg.CircuitBreaker.HalfOpenMax,
-			SlowThreshold:    newCfg.CircuitBreaker.SlowThreshold,
-			MaxConcurrent:    newCfg.CircuitBreaker.MaxConcurrent,
-			Adaptive:         newCfg.CircuitBreaker.Adaptive,
-			LatencyCeiling:   newCfg.CircuitBreaker.LatencyCeiling,
-			MinThreshold:     newCfg.CircuitBreaker.MinThreshold,
-		}
-		for backend, cb := range g.Breakers {
-			cb.UpdateConfig(newCbCfg)
-			logger.Info("circuit breaker config updated", "backend", backend)
-		}
-		g.routesRef.Store(newCfg.Routes)
-	})
+	// DP-001: the Gateway itself implements ConfigObserver so hot reloads
+	// go through the rollback-capable pipeline. OnReload is idempotent —
+	// it overwrites limiter rates, breaker thresholds, and the routes atom
+	// unconditionally — which is the contract the Reloader documents.
+	g.Reloader.RegisterObserver(g)
 
 	g.Server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
@@ -279,6 +261,31 @@ func (g *Gateway) SetReloadPath(path string) {
 // Handler returns the composed top-level handler, exported for tests that
 // exercise requests in-process without binding a TCP listener.
 func (g *Gateway) Handler() http.Handler { return g.handler }
+
+// OnReload implements config.ConfigObserver. It is idempotent: every field
+// is rewritten from `newCfg` regardless of the current state, so a rollback
+// (which only restores the Reloader's current pointer) followed by a later
+// successful reload will always bring subsystems in line with the config.
+func (g *Gateway) OnReload(old, newCfg *config.Config) error {
+	g.Limiter.UpdateConfig(newCfg.RateLimit, newCfg.Routes)
+	newCbCfg := circuitbreaker.Config{
+		WindowSize:       newCfg.CircuitBreaker.WindowSize,
+		FailureThreshold: newCfg.CircuitBreaker.FailureThreshold,
+		ResetTimeout:     newCfg.CircuitBreaker.ResetTimeout,
+		HalfOpenMax:      newCfg.CircuitBreaker.HalfOpenMax,
+		SlowThreshold:    newCfg.CircuitBreaker.SlowThreshold,
+		MaxConcurrent:    newCfg.CircuitBreaker.MaxConcurrent,
+		Adaptive:         newCfg.CircuitBreaker.Adaptive,
+		LatencyCeiling:   newCfg.CircuitBreaker.LatencyCeiling,
+		MinThreshold:     newCfg.CircuitBreaker.MinThreshold,
+	}
+	for backend, cb := range g.Breakers {
+		cb.UpdateConfig(newCbCfg)
+		g.Logger.Info("circuit breaker config updated", "backend", backend)
+	}
+	g.routesRef.Store(newCfg.Routes)
+	return nil
+}
 
 // Run starts the watcher, binds the HTTP server, and blocks until ctx is
 // cancelled or the server returns a fatal error. Graceful shutdown happens
