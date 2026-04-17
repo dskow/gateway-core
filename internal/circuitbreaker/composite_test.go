@@ -144,6 +144,125 @@ func TestComposite_UpdateConfig(t *testing.T) {
 	}
 }
 
+func TestComposite_EffectiveState_NoBulkhead(t *testing.T) {
+	cfg := Config{
+		WindowSize:       4,
+		FailureThreshold: 0.5,
+		ResetTimeout:     30 * time.Second,
+		HalfOpenMax:      2,
+	}
+	cb := NewComposite("http://test:8080", cfg, slog.Default())
+
+	if got := cb.EffectiveState(); got != StateClosed {
+		t.Fatalf("EffectiveState closed, got %v", got)
+	}
+	if got := cb.InnerState(); got != StateClosed {
+		t.Fatalf("InnerState closed, got %v", got)
+	}
+
+	// Trip the inner breaker — both states should follow.
+	for i := 0; i < 4; i++ {
+		cb.RecordFailure(10 * time.Millisecond)
+	}
+	if got := cb.InnerState(); got != StateOpen {
+		t.Fatalf("InnerState open after trip, got %v", got)
+	}
+	if got := cb.EffectiveState(); got != StateOpen {
+		t.Fatalf("EffectiveState open after trip, got %v", got)
+	}
+}
+
+func TestComposite_EffectiveState_BulkheadAtCapacity(t *testing.T) {
+	cfg := Config{
+		WindowSize:       10,
+		FailureThreshold: 0.9,
+		ResetTimeout:     30 * time.Second,
+		HalfOpenMax:      2,
+		MaxConcurrent:    2,
+	}
+	cb := NewComposite("http://test:8080", cfg, slog.Default())
+
+	// Inner breaker closed, bulkhead has slack → both states closed.
+	if got := cb.InnerState(); got != StateClosed {
+		t.Fatalf("InnerState closed, got %v", got)
+	}
+	if got := cb.EffectiveState(); got != StateClosed {
+		t.Fatalf("EffectiveState closed with slack, got %v", got)
+	}
+
+	// Saturate bulkhead.
+	if !cb.Allow() {
+		t.Fatal("Allow slot 1")
+	}
+	if !cb.Allow() {
+		t.Fatal("Allow slot 2")
+	}
+
+	// Inner breaker is still closed — but effective state flips to open
+	// because the bulkhead is rejecting.
+	if got := cb.InnerState(); got != StateClosed {
+		t.Fatalf("InnerState still closed, got %v", got)
+	}
+	if got := cb.EffectiveState(); got != StateOpen {
+		t.Fatalf("EffectiveState open when bulkhead saturated, got %v", got)
+	}
+
+	// Release a slot → effective state returns to closed.
+	cb.Release()
+	if got := cb.EffectiveState(); got != StateClosed {
+		t.Fatalf("EffectiveState closed after release, got %v", got)
+	}
+
+	cb.Release()
+}
+
+func TestComposite_EffectiveState_BulkheadAndInnerOpen(t *testing.T) {
+	cfg := Config{
+		WindowSize:       2,
+		FailureThreshold: 0.5,
+		ResetTimeout:     30 * time.Second,
+		HalfOpenMax:      1,
+		MaxConcurrent:    1,
+	}
+	cb := NewComposite("http://test:8080", cfg, slog.Default())
+
+	// Trip the inner breaker.
+	cb.RecordFailure(10 * time.Millisecond)
+	cb.RecordFailure(10 * time.Millisecond)
+
+	if got := cb.InnerState(); got != StateOpen {
+		t.Fatalf("InnerState open, got %v", got)
+	}
+	if got := cb.EffectiveState(); got != StateOpen {
+		t.Fatalf("EffectiveState open (inner tripped), got %v", got)
+	}
+}
+
+func TestComposite_StateAliasesInnerState(t *testing.T) {
+	cfg := Config{
+		WindowSize:       4,
+		FailureThreshold: 0.5,
+		ResetTimeout:     30 * time.Second,
+		HalfOpenMax:      2,
+		MaxConcurrent:    1,
+	}
+	cb := NewComposite("http://test:8080", cfg, slog.Default())
+
+	// Saturate bulkhead so inner and effective would disagree.
+	if !cb.Allow() {
+		t.Fatal("Allow slot 1")
+	}
+
+	if cb.State() != cb.InnerState() {
+		t.Fatal("State() must alias InnerState() for backward compat")
+	}
+	if cb.State() == cb.EffectiveState() {
+		t.Fatal("State() must not track EffectiveState() when they legitimately differ")
+	}
+
+	cb.Release()
+}
+
 func TestComposite_FullStack(t *testing.T) {
 	cfg := Config{
 		WindowSize:       4,

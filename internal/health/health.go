@@ -77,8 +77,11 @@ func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
 	for _, route := range h.routes {
 		go func(route config.RouteConfig) {
 			// Fast path: use circuit breaker state if available.
+			// EffectiveState (not InnerState) so a saturated bulkhead flips
+			// readiness to unhealthy even when the failure-rate breaker is
+			// closed — a bulkhead at capacity is actively shedding load.
 			if cb, exists := h.breakers[route.Backend]; exists && cb != nil {
-				st := cb.State()
+				st := cb.EffectiveState()
 				switch st {
 				case circuitbreaker.StateOpen:
 					ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "circuit-open", ok: false}

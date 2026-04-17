@@ -69,3 +69,10 @@ func (b *BulkheadBreaker) State() State {
 func (b *BulkheadBreaker) Reset() {
 	b.inner.Reset()
 }
+
+// AtCapacity reports whether the bulkhead currently has no free slots and
+// would reject the next Allow() on capacity grounds alone. Informational
+// only — callers must still go through Allow() to acquire a slot.
+func (b *BulkheadBreaker) AtCapacity() bool {
+	return len(b.sem) >= cap(b.sem)
+}

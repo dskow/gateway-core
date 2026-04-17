@@ -81,9 +81,28 @@ func (c *CompositeBreaker) RecordFailure(latency time.Duration) {
 	c.effective.RecordFailure(latency)
 }
 
-// State returns the core failure-rate breaker's state.
-func (c *CompositeBreaker) State() State {
+// InnerState returns the core failure-rate breaker's state, ignoring any
+// outer decorators (bulkhead, timeout, adaptive).
+func (c *CompositeBreaker) InnerState() State {
 	return c.failureRate.State()
+}
+
+// EffectiveState returns the state the caller actually observes at the
+// outermost decorator: StateOpen when an outer layer (today, the bulkhead)
+// is rejecting regardless of the inner breaker, otherwise InnerState.
+// Health/readiness probes should use EffectiveState so a saturated
+// bulkhead does not appear "green" while the gateway is shedding load.
+func (c *CompositeBreaker) EffectiveState() State {
+	if c.bulkhead != nil && c.bulkhead.AtCapacity() {
+		return StateOpen
+	}
+	return c.InnerState()
+}
+
+// State is an alias for InnerState preserved for backward compatibility.
+// Prefer InnerState (explicit) or EffectiveState (outermost) at new call sites.
+func (c *CompositeBreaker) State() State {
+	return c.InnerState()
 }
 
 func (c *CompositeBreaker) Reset() {
