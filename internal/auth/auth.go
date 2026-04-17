@@ -30,8 +30,14 @@ type Claims struct {
 }
 
 // Middleware returns an HTTP middleware that validates JWT Bearer tokens.
-// Routes that do not require authentication are passed through.
-func Middleware(cfg config.AuthConfig, routeRequiresAuth func(path string) bool, logger *slog.Logger) func(http.Handler) http.Handler {
+// Routes that do not require authentication are passed through. m may be nil
+// for tests that do not exercise the metrics path.
+func Middleware(cfg config.AuthConfig, routeRequiresAuth func(path string) bool, logger *slog.Logger, m *metrics.Metrics) func(http.Handler) http.Handler {
+	recordFailure := func(reason string) {
+		if m != nil {
+			m.AuthFailures.WithLabelValues(reason).Inc()
+		}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !cfg.Enabled || !routeRequiresAuth(r.URL.Path) {
@@ -41,7 +47,7 @@ func Middleware(cfg config.AuthConfig, routeRequiresAuth func(path string) bool,
 
 			tokenStr, ok := extractBearerToken(r)
 			if !ok {
-				metrics.AuthFailures.WithLabelValues("missing_token").Inc()
+				recordFailure("missing_token")
 				apierror.WriteJSON(w, r, http.StatusUnauthorized, apierror.AuthMissingToken, "missing or malformed Authorization header")
 				return
 			}
@@ -50,10 +56,10 @@ func Middleware(cfg config.AuthConfig, routeRequiresAuth func(path string) bool,
 			if err != nil {
 				logger.Warn("auth failure", "error", err, "path", r.URL.Path)
 				if isScopeError(err) {
-					metrics.AuthFailures.WithLabelValues("insufficient_scope").Inc()
+					recordFailure("insufficient_scope")
 					apierror.WriteJSON(w, r, http.StatusForbidden, apierror.AuthInsufficientScope, err.Error())
 				} else {
-					metrics.AuthFailures.WithLabelValues("invalid_token").Inc()
+					recordFailure("invalid_token")
 					apierror.WriteJSON(w, r, http.StatusUnauthorized, apierror.AuthInvalidToken, err.Error())
 				}
 				return

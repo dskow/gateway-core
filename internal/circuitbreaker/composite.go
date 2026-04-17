@@ -3,6 +3,8 @@ package circuitbreaker
 import (
 	"log/slog"
 	"time"
+
+	"github.com/dskow/gateway-core/internal/metrics"
 )
 
 // Config holds all circuit breaker configuration. The failure-rate breaker is
@@ -38,8 +40,9 @@ type CompositeBreaker struct {
 
 // NewComposite builds a composed breaker stack for the given backend.
 // Composition order (inside → out): FailureRate → Adaptive → Timeout → Bulkhead.
-func NewComposite(backend string, cfg Config, logger *slog.Logger) *CompositeBreaker {
-	fr := NewFailureRateBreaker(backend, cfg.WindowSize, cfg.FailureThreshold, cfg.ResetTimeout, cfg.HalfOpenMax, logger)
+// m may be nil for tests that do not exercise the metrics path.
+func NewComposite(backend string, cfg Config, logger *slog.Logger, m *metrics.Metrics) *CompositeBreaker {
+	fr := NewFailureRateBreaker(backend, cfg.WindowSize, cfg.FailureThreshold, cfg.ResetTimeout, cfg.HalfOpenMax, logger, m)
 
 	var current Breaker = fr
 
@@ -61,7 +64,7 @@ func NewComposite(backend string, cfg Config, logger *slog.Logger) *CompositeBre
 
 	// Wrap with bulkhead if max concurrent is configured.
 	if cfg.MaxConcurrent > 0 {
-		bh := NewBulkheadBreaker(current, cfg.MaxConcurrent, backend)
+		bh := NewBulkheadBreaker(current, cfg.MaxConcurrent, backend, m)
 		cb.bulkhead = bh
 		cb.effective = bh
 	}

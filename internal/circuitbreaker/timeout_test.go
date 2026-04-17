@@ -48,7 +48,7 @@ func TestTimeoutBreaker_ExplicitFailure(t *testing.T) {
 }
 
 func TestTimeoutBreaker_DelegatesAllowAndState(t *testing.T) {
-	inner := NewFailureRateBreaker("test", 2, 1.0, 30*time.Second, 1, slog.Default())
+	inner := NewFailureRateBreaker("test", 2, 1.0, 30*time.Second, 1, slog.Default(), nil)
 	tb := NewTimeoutBreaker(inner, 100*time.Millisecond)
 
 	if !tb.Allow() {

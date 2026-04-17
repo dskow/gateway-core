@@ -29,7 +29,7 @@ func FuzzAuthMiddleware(f *testing.F) {
 	}
 	logger := slog.New(slog.NewTextHandler(discard{}, nil))
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),

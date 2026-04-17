@@ -93,8 +93,10 @@ func (s ServerConfig) GlobalTimeout() time.Duration {
 
 // RateLimitConfig holds the global rate limiter settings.
 type RateLimitConfig struct {
-	RequestsPerSecond float64 `yaml:"requests_per_second" json:"requests_per_second"`
-	BurstSize         int     `yaml:"burst_size" json:"burst_size"`
+	RequestsPerSecond float64       `yaml:"requests_per_second" json:"requests_per_second"`
+	BurstSize         int           `yaml:"burst_size" json:"burst_size"`
+	IdleTTL           time.Duration `yaml:"idle_ttl" json:"idle_ttl"`                   // how long an unused client entry is kept before eviction; 0 = default
+	CleanupInterval   time.Duration `yaml:"cleanup_interval" json:"cleanup_interval"`   // janitor scan cadence; 0 = default
 }
 
 // AuthConfig holds JWT/OAuth2 authentication settings.
@@ -260,6 +262,25 @@ func applyDefaults(cfg *Config) {
 	if cfg.RateLimit.BurstSize == 0 {
 		cfg.RateLimit.BurstSize = 50
 	}
+	// Janitor defaults: TTL = max(10 minutes, 10 × burst-refill window),
+	// scan interval = TTL / 10 (capped at 1 minute minimum).
+	if cfg.RateLimit.IdleTTL <= 0 {
+		ttl := 10 * time.Minute
+		if cfg.RateLimit.RequestsPerSecond > 0 {
+			refill := time.Duration(float64(cfg.RateLimit.BurstSize)/cfg.RateLimit.RequestsPerSecond*float64(time.Second)) * 10
+			if refill > ttl {
+				ttl = refill
+			}
+		}
+		cfg.RateLimit.IdleTTL = ttl
+	}
+	if cfg.RateLimit.CleanupInterval <= 0 {
+		interval := cfg.RateLimit.IdleTTL / 10
+		if interval < time.Minute {
+			interval = time.Minute
+		}
+		cfg.RateLimit.CleanupInterval = interval
+	}
 
 	// Circuit breaker defaults
 	cb := &cfg.CircuitBreaker
@@ -301,6 +322,12 @@ func validate(cfg *Config) error {
 	}
 	if cfg.RateLimit.BurstSize <= 0 {
 		return fmt.Errorf("rate_limit.burst_size must be positive")
+	}
+	if cfg.RateLimit.IdleTTL < 0 {
+		return fmt.Errorf("rate_limit.idle_ttl must be non-negative")
+	}
+	if cfg.RateLimit.CleanupInterval < 0 {
+		return fmt.Errorf("rate_limit.cleanup_interval must be non-negative")
 	}
 	if cfg.Auth.Enabled {
 		if cfg.Auth.JWTSecret == "" {

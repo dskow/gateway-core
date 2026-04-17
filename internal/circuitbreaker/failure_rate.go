@@ -22,6 +22,7 @@ type FailureRateBreaker struct {
 	state   State
 	backend string
 	logger  *slog.Logger
+	metrics *metrics.Metrics
 
 	// Sliding window implemented as a ring buffer.
 	window   []outcome
@@ -38,12 +39,15 @@ type FailureRateBreaker struct {
 	openedAt        time.Time
 }
 
-// NewFailureRateBreaker creates a failure-rate circuit breaker for the given backend.
-func NewFailureRateBreaker(backend string, windowSize int, failureThreshold float64, resetTimeout time.Duration, halfOpenMax int, logger *slog.Logger) *FailureRateBreaker {
+// NewFailureRateBreaker creates a failure-rate circuit breaker for the given
+// backend. m may be nil for tests that do not exercise the metrics path; in
+// production code (via Gateway / NewComposite) it is always supplied.
+func NewFailureRateBreaker(backend string, windowSize int, failureThreshold float64, resetTimeout time.Duration, halfOpenMax int, logger *slog.Logger, m *metrics.Metrics) *FailureRateBreaker {
 	return &FailureRateBreaker{
 		state:            StateClosed,
 		backend:          backend,
 		logger:           logger,
+		metrics:          m,
 		window:           make([]outcome, windowSize),
 		windowSize:       windowSize,
 		failureThreshold: failureThreshold,
@@ -159,8 +163,10 @@ func (b *FailureRateBreaker) transitionTo(newState State) {
 	from := b.state
 	b.state = newState
 
-	metrics.CircuitBreakerStateChanges.WithLabelValues(b.backend, from.String(), newState.String()).Inc()
-	metrics.CircuitBreakerState.WithLabelValues(b.backend).Set(float64(newState))
+	if b.metrics != nil {
+		b.metrics.CircuitBreakerStateChanges.WithLabelValues(b.backend, from.String(), newState.String()).Inc()
+		b.metrics.CircuitBreakerState.WithLabelValues(b.backend).Set(float64(newState))
+	}
 
 	b.logger.Info("circuit breaker state change",
 		"backend", b.backend,

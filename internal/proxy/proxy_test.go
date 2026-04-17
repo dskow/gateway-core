@@ -40,7 +40,7 @@ func TestRouter_RouteMatching(t *testing.T) {
 	}
 
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestRouter_NoMatchingRoute(t *testing.T) {
 		{PathPrefix: "/api", Backend: "http://localhost:9999", TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestRouter_MethodNotAllowed(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, Methods: []string{"GET"}, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRouter_PrefixStripping(t *testing.T) {
 		{PathPrefix: "/api/users", Backend: backend.URL, StripPrefix: true, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestRouter_PrefixStripping_RootPath(t *testing.T) {
 		{PathPrefix: "/api/users", Backend: backend.URL, StripPrefix: true, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRouter_HeaderInjection(t *testing.T) {
 		},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestRouter_XForwardedFor(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestRouter_GatewayLatencyHeader(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestRouter_InvalidBackendURL(t *testing.T) {
 		{PathPrefix: "/api", Backend: "://bad-url", TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	_, err := New(routes, nil, logger)
+	_, err := New(routes, nil, logger, nil)
 	if err == nil {
 		t.Error("expected error for invalid backend URL")
 	}
@@ -259,7 +259,7 @@ func TestRouter_PathBoundaryEnforcement(t *testing.T) {
 		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
 	}
 	logger := slog.Default()
-	router, err := New(routes, nil, logger)
+	router, err := New(routes, nil, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestRouter_SharesProxyAcrossRoutesWithSameBackend(t *testing.T) {
 		{PathPrefix: "/api/orders", Backend: backend.URL, TimeoutMs: 5000},
 		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
 	}
-	router, err := New(routes, nil, slog.Default())
+	router, err := New(routes, nil, slog.Default(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestRouter_DistinctProxiesForDistinctBackends(t *testing.T) {
 		{PathPrefix: "/a", Backend: a.URL, TimeoutMs: 5000},
 		{PathPrefix: "/b", Backend: b.URL, TimeoutMs: 5000},
 	}
-	router, err := New(routes, nil, slog.Default())
+	router, err := New(routes, nil, slog.Default(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestRouter_DistinctProxiesForSameHostDifferentPath(t *testing.T) {
 		{PathPrefix: "/v1", Backend: "http://api.example.com:8080/v1", TimeoutMs: 5000},
 		{PathPrefix: "/v2", Backend: "http://api.example.com:8080/v2", TimeoutMs: 5000},
 	}
-	router, err := New(routes, nil, slog.Default())
+	router, err := New(routes, nil, slog.Default(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

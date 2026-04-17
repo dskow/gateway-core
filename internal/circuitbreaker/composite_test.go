@@ -13,7 +13,7 @@ func TestComposite_BasicFailureRate(t *testing.T) {
 		ResetTimeout:     10 * time.Millisecond,
 		HalfOpenMax:      1,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	if cb.State() != StateClosed {
 		t.Fatal("expected StateClosed")
@@ -45,7 +45,7 @@ func TestComposite_WithTimeoutBreaker(t *testing.T) {
 		HalfOpenMax:      2,
 		SlowThreshold:    50 * time.Millisecond,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	// All "successes" but slow — should count as failures.
 	cb.RecordSuccess(100 * time.Millisecond)
@@ -66,7 +66,7 @@ func TestComposite_WithBulkhead(t *testing.T) {
 		HalfOpenMax:      2,
 		MaxConcurrent:    2,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	// Acquire 2 slots.
 	if !cb.Allow() {
@@ -102,7 +102,7 @@ func TestComposite_WithAdaptive(t *testing.T) {
 		LatencyCeiling:   50 * time.Millisecond,
 		MinThreshold:     0.1,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	// Send high-latency calls to trigger adaptive tightening.
 	cb.RecordSuccess(200 * time.Millisecond)
@@ -124,7 +124,7 @@ func TestComposite_UpdateConfig(t *testing.T) {
 		ResetTimeout:     30 * time.Second,
 		HalfOpenMax:      2,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	newCfg := Config{
 		WindowSize:       8,
@@ -151,7 +151,7 @@ func TestComposite_EffectiveState_NoBulkhead(t *testing.T) {
 		ResetTimeout:     30 * time.Second,
 		HalfOpenMax:      2,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	if got := cb.EffectiveState(); got != StateClosed {
 		t.Fatalf("EffectiveState closed, got %v", got)
@@ -180,7 +180,7 @@ func TestComposite_EffectiveState_BulkheadAtCapacity(t *testing.T) {
 		HalfOpenMax:      2,
 		MaxConcurrent:    2,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	// Inner breaker closed, bulkhead has slack → both states closed.
 	if got := cb.InnerState(); got != StateClosed {
@@ -224,7 +224,7 @@ func TestComposite_EffectiveState_BulkheadAndInnerOpen(t *testing.T) {
 		HalfOpenMax:      1,
 		MaxConcurrent:    1,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	// Trip the inner breaker.
 	cb.RecordFailure(10 * time.Millisecond)
@@ -246,7 +246,7 @@ func TestComposite_StateAliasesInnerState(t *testing.T) {
 		HalfOpenMax:      2,
 		MaxConcurrent:    1,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	// Saturate bulkhead so inner and effective would disagree.
 	if !cb.Allow() {
@@ -275,7 +275,7 @@ func TestComposite_FullStack(t *testing.T) {
 		LatencyCeiling:   100 * time.Millisecond,
 		MinThreshold:     0.2,
 	}
-	cb := NewComposite("http://test:8080", cfg, slog.Default())
+	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
 	// Full stack: bulkhead → timeout → adaptive → failure-rate.
 	if !cb.Allow() {

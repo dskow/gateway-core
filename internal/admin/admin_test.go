@@ -47,7 +47,7 @@ func testHandler(t *testing.T, allowlist []string) (*Handler, *ratelimit.Limiter
 
 	limiter := ratelimit.New(
 		config.RateLimitConfig{RequestsPerSecond: 100, BurstSize: 50},
-		routes, nil, logger,
+		routes, nil, logger, nil,
 	)
 
 	breakers := map[string]*circuitbreaker.CompositeBreaker{
@@ -56,7 +56,7 @@ func testHandler(t *testing.T, allowlist []string) (*Handler, *ratelimit.Limiter
 			FailureThreshold: 0.5,
 			ResetTimeout:     30e9,
 			HalfOpenMax:      2,
-		}, logger),
+		}, logger, nil),
 	}
 
 	reloader := &mockConfigProvider{cfg: cfg}

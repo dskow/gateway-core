@@ -8,7 +8,7 @@ import (
 
 func TestBulkhead_AllowsUpToLimit(t *testing.T) {
 	inner := newTestBreaker(10, 0.9, 30*time.Second, 2)
-	bh := NewBulkheadBreaker(inner, 3, "test-backend")
+	bh := NewBulkheadBreaker(inner, 3, "test-backend", nil)
 
 	// Acquire 3 slots — all should succeed.
 	for i := 0; i < 3; i++ {
@@ -25,7 +25,7 @@ func TestBulkhead_AllowsUpToLimit(t *testing.T) {
 
 func TestBulkhead_ReleaseFreesSlot(t *testing.T) {
 	inner := newTestBreaker(10, 0.9, 30*time.Second, 2)
-	bh := NewBulkheadBreaker(inner, 1, "test-backend")
+	bh := NewBulkheadBreaker(inner, 1, "test-backend", nil)
 
 	if !bh.Allow() {
 		t.Fatal("expected first Allow()")
@@ -49,7 +49,7 @@ func TestBulkhead_RejectsWhenInnerRejects(t *testing.T) {
 	inner.RecordFailure(10 * time.Millisecond)
 	inner.RecordFailure(10 * time.Millisecond)
 
-	bh := NewBulkheadBreaker(inner, 10, "test-backend")
+	bh := NewBulkheadBreaker(inner, 10, "test-backend", nil)
 
 	// Bulkhead has slots, but inner breaker is open.
 	if bh.Allow() {
@@ -59,7 +59,7 @@ func TestBulkhead_RejectsWhenInnerRejects(t *testing.T) {
 
 func TestBulkhead_ConcurrentAccess(t *testing.T) {
 	inner := newTestBreaker(100, 0.9, 30*time.Second, 2)
-	bh := NewBulkheadBreaker(inner, 10, "test-backend")
+	bh := NewBulkheadBreaker(inner, 10, "test-backend", nil)
 
 	var wg sync.WaitGroup
 	allowed := make(chan struct{}, 100)
@@ -95,7 +95,7 @@ func TestBulkhead_ConcurrentAccess(t *testing.T) {
 
 func TestBulkhead_DelegatesRecordAndState(t *testing.T) {
 	inner := newTestBreaker(10, 0.5, 30*time.Second, 2)
-	bh := NewBulkheadBreaker(inner, 5, "test-backend")
+	bh := NewBulkheadBreaker(inner, 5, "test-backend", nil)
 
 	if bh.State() != StateClosed {
 		t.Fatal("expected StateClosed")

@@ -47,6 +47,7 @@ type Router struct {
 	breakers        map[string]*circuitbreaker.CompositeBreaker
 	methodSets      map[string]map[string]bool // pathPrefix → allowed methods (upper-case)
 	logger          *slog.Logger
+	metrics         *metrics.Metrics
 }
 
 // backendKey returns a stable identity key for a backend URL. Two routes
@@ -71,8 +72,9 @@ func backendKey(u *url.URL) string {
 
 // New creates a Router from the given route configurations. Routes are
 // sorted by path prefix length (longest first) for correct matching.
-// breakers maps backend URLs to their circuit breaker instances.
-func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.CompositeBreaker, logger *slog.Logger) (*Router, error) {
+// breakers maps backend URLs to their circuit breaker instances. m may be
+// nil for tests that do not exercise the metrics path.
+func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.CompositeBreaker, logger *slog.Logger, m *metrics.Metrics) (*Router, error) {
 	sorted := make([]config.RouteConfig, len(routes))
 	copy(sorted, routes)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -132,6 +134,7 @@ func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.Compos
 		breakers:        breakers,
 		methodSets:      methodSets,
 		logger:          logger,
+		metrics:         m,
 	}, nil
 }
 
@@ -204,8 +207,10 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer breaker.Release()
 	}
 
-	metrics.ActiveConnections.Inc()
-	defer metrics.ActiveConnections.Dec()
+	if rt.metrics != nil {
+		rt.metrics.ActiveConnections.Inc()
+		defer rt.metrics.ActiveConnections.Dec()
+	}
 
 	proxy := rt.proxies[rt.routeBackendKey[route.PathPrefix]]
 
@@ -284,7 +289,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		responseBufferPool.Put(buf)
 
-		metrics.RetryTotal.WithLabelValues(route.PathPrefix, route.Backend).Inc()
+		if rt.metrics != nil {
+			rt.metrics.RetryTotal.WithLabelValues(route.PathPrefix, route.Backend).Inc()
+		}
 
 		rt.logger.Warn("retrying request",
 			"path", originalPath,
@@ -300,11 +307,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	totalLatency := time.Since(start)
 
 	statusStr := strconv.Itoa(recorder.statusCode)
-	metrics.RequestsTotal.WithLabelValues(route.PathPrefix, r.Method, statusStr).Inc()
-	metrics.RequestDuration.WithLabelValues(route.PathPrefix, r.Method).Observe(totalLatency.Seconds())
-
-	if recorder.statusCode >= 500 {
-		metrics.BackendErrors.WithLabelValues(route.PathPrefix, route.Backend, statusStr).Inc()
+	if rt.metrics != nil {
+		rt.metrics.RequestsTotal.WithLabelValues(route.PathPrefix, r.Method, statusStr).Inc()
+		rt.metrics.RequestDuration.WithLabelValues(route.PathPrefix, r.Method).Observe(totalLatency.Seconds())
+		if recorder.statusCode >= 500 {
+			rt.metrics.BackendErrors.WithLabelValues(route.PathPrefix, route.Backend, statusStr).Inc()
+		}
 	}
 }
 

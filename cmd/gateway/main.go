@@ -29,6 +29,7 @@ import (
 	"github.com/dskow/gateway-core/internal/ratelimit"
 	"github.com/dskow/gateway-core/internal/routing"
 	"github.com/dskow/gateway-core/internal/tlsutil"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -68,9 +69,11 @@ func main() {
 		"log_output", cfg.Logging.Output,
 	)
 
-	// Initialize Prometheus metrics
+	// Build the injected Metrics bundle (DP-002). Nil when metrics are
+	// disabled in config; every subsystem tolerates a nil *Metrics.
+	var m *metrics.Metrics
 	if cfg.Metrics.IsEnabled() {
-		metrics.Init()
+		m = metrics.New(prometheus.DefaultRegisterer)
 	}
 
 	// Create circuit breakers (one per unique backend URL).
@@ -88,20 +91,20 @@ func main() {
 	breakers := make(map[string]*circuitbreaker.CompositeBreaker)
 	for _, route := range cfg.Routes {
 		if _, exists := breakers[route.Backend]; !exists {
-			breakers[route.Backend] = circuitbreaker.NewComposite(route.Backend, cbCfg, logger)
+			breakers[route.Backend] = circuitbreaker.NewComposite(route.Backend, cbCfg, logger, m)
 			logger.Info("circuit breaker created", "backend", route.Backend)
 		}
 	}
 
 	// Build the proxy router
-	router, err := proxy.New(cfg.Routes, breakers, logger)
+	router, err := proxy.New(cfg.Routes, breakers, logger, m)
 	if err != nil {
 		logger.Error("failed to create proxy router", "error", err)
 		os.Exit(1)
 	}
 
 	// Build the rate limiter
-	limiter := ratelimit.New(cfg.RateLimit, cfg.Routes, cfg.Server.TrustedProxies, logger)
+	limiter := ratelimit.New(cfg.RateLimit, cfg.Routes, cfg.Server.TrustedProxies, logger, m)
 	defer limiter.Stop()
 
 	// Route auth checker: looks up whether a matching route requires auth
@@ -143,7 +146,7 @@ func main() {
 	// Assemble middleware stack:
 	// Recovery → RequestID → Deadline → SecurityHeaders → Logging → CORS → BodyLimit → RateLimit → Auth → Proxy
 	var handler http.Handler = router
-	handler = auth.Middleware(cfg.Auth, routeRequiresAuth, logger)(handler)
+	handler = auth.Middleware(cfg.Auth, routeRequiresAuth, logger, m)(handler)
 	handler = limiter.Middleware()(handler)
 	handler = middleware.BodyLimit(cfg.Server.MaxBodyBytes)(handler)
 	handler = middleware.CORS(middleware.DefaultCORSConfig())(handler)
@@ -161,7 +164,7 @@ func main() {
 
 	metricsPath := cfg.Metrics.Path
 	if cfg.Metrics.IsEnabled() {
-		mux.Handle(metricsPath, metrics.Handler())
+		mux.Handle(metricsPath, metrics.Handler(prometheus.DefaultGatherer))
 		logger.Info("metrics endpoint registered", "path", metricsPath)
 	}
 

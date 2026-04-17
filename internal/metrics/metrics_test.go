@@ -8,104 +8,81 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-func TestInit_RegistersMetrics(t *testing.T) {
-	// Use a custom registry to avoid conflicts with other tests
+// DP-002: multiple *Metrics instances must coexist without double-registration
+// panics. Proves there is no hidden package-level state behind the struct.
+func TestMetrics_TwoInstancesCoexist(t *testing.T) {
+	a := New(prometheus.NewRegistry())
+	b := New(prometheus.NewRegistry())
+
+	a.RequestsTotal.WithLabelValues("/a", "GET", "200").Inc()
+	b.RequestsTotal.WithLabelValues("/b", "GET", "200").Inc()
+	b.RequestsTotal.WithLabelValues("/b", "GET", "200").Inc()
+
+	if got := testutil.ToFloat64(a.RequestsTotal.WithLabelValues("/a", "GET", "200")); got != 1 {
+		t.Fatalf("a.RequestsTotal = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(b.RequestsTotal.WithLabelValues("/b", "GET", "200")); got != 2 {
+		t.Fatalf("b.RequestsTotal = %v, want 2", got)
+	}
+	// Neither instance's series leaks into the other.
+	if got := testutil.ToFloat64(a.RequestsTotal.WithLabelValues("/b", "GET", "200")); got != 0 {
+		t.Fatalf("a saw b's series: got %v", got)
+	}
+}
+
+// DP-002: the same collector names from the pre-refactor globals must still
+// be exposed so existing dashboards and scrape configs keep working.
+func TestMetrics_ExposesExpectedCollectorNames(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(
-		RequestsTotal,
-		RequestDuration,
-		ActiveConnections,
-		RateLimitHits,
-		AuthFailures,
-		BackendErrors,
-		RetryTotal,
-	)
+	m := New(reg)
 
-	// Verify metrics are gatherable
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("failed to gather metrics: %v", err)
-	}
+	// Exercise every collector so at least one sample exists per family.
+	m.RequestsTotal.WithLabelValues("/x", "GET", "200").Inc()
+	m.RequestDuration.WithLabelValues("/x", "GET").Observe(0.1)
+	m.ActiveConnections.Inc()
+	m.RateLimitHits.WithLabelValues("/x").Inc()
+	m.AuthFailures.WithLabelValues("invalid_token").Inc()
+	m.BackendErrors.WithLabelValues("/x", "http://b", "502").Inc()
+	m.RetryTotal.WithLabelValues("/x", "http://b").Inc()
+	m.CircuitBreakerStateChanges.WithLabelValues("http://b", "closed", "open").Inc()
+	m.CircuitBreakerState.WithLabelValues("http://b").Set(1)
+	m.BulkheadRejections.WithLabelValues("http://b").Inc()
+	m.BulkheadInFlight.WithLabelValues("http://b").Set(0)
+	m.RateLimitClientsTracked.Set(7)
+	m.RateLimitClientsEvicted.Inc()
+	m.ConfigReloadRollbacks.WithLabelValues("observer_error").Inc()
 
-	// Should have at least some metric families registered
-	// (counters/histograms start with 0 families until incremented)
-	_ = families
-}
-
-func TestRequestsTotal_Increment(t *testing.T) {
-	RequestsTotal.WithLabelValues("/api/users", "GET", "200").Inc()
-	RequestsTotal.WithLabelValues("/api/users", "GET", "200").Inc()
-	RequestsTotal.WithLabelValues("/api/users", "POST", "201").Inc()
-
-	// Verify by collecting — if this doesn't panic, the metrics work
-	RequestsTotal.WithLabelValues("/api/users", "GET", "200").Add(0)
-}
-
-func TestRequestDuration_Observe(t *testing.T) {
-	RequestDuration.WithLabelValues("/api/users", "GET").Observe(0.123)
-	RequestDuration.WithLabelValues("/api/users", "POST").Observe(0.456)
-
-	// Verify by collecting
-	RequestDuration.WithLabelValues("/api/users", "GET").Observe(0)
-}
-
-func TestActiveConnections_IncDec(t *testing.T) {
-	ActiveConnections.Inc()
-	ActiveConnections.Inc()
-	ActiveConnections.Dec()
-	// Should not panic
-}
-
-func TestRateLimitHits_Increment(t *testing.T) {
-	RateLimitHits.WithLabelValues("/api/users").Inc()
-	// Should not panic
-}
-
-func TestAuthFailures_Increment(t *testing.T) {
-	AuthFailures.WithLabelValues("missing_token").Inc()
-	AuthFailures.WithLabelValues("invalid_token").Inc()
-	AuthFailures.WithLabelValues("insufficient_scope").Inc()
-	// Should not panic
-}
-
-func TestBackendErrors_Increment(t *testing.T) {
-	BackendErrors.WithLabelValues("/api/users", "http://backend:3000", "502").Inc()
-	// Should not panic
-}
-
-func TestRetryTotal_Increment(t *testing.T) {
-	RetryTotal.WithLabelValues("/api/users", "http://backend:3000").Inc()
-	// Should not panic
-}
-
-func TestHandler_ReturnsPrometheusFormat(t *testing.T) {
-	// Register metrics with default registry for handler test
-	Init()
-
-	// Increment a counter so there's output
-	RequestsTotal.WithLabelValues("/test", "GET", "200").Inc()
-
-	h := Handler()
-	req := httptest.NewRequest("GET", "/metrics", nil)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rec.Code)
-	}
+	Handler(reg).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 
 	body, _ := io.ReadAll(rec.Body)
-	bodyStr := string(body)
+	out := string(body)
 
-	if !strings.Contains(bodyStr, "gateway_requests_total") {
-		t.Error("expected gateway_requests_total in metrics output")
+	wanted := []string{
+		"gateway_requests_total",
+		"gateway_request_duration_seconds",
+		"gateway_active_connections",
+		"gateway_rate_limit_hits_total",
+		"gateway_auth_failures_total",
+		"gateway_backend_errors_total",
+		"gateway_retries_total",
+		"gateway_circuit_breaker_state_changes_total",
+		"gateway_circuit_breaker_state",
+		"gateway_bulkhead_rejections_total",
+		"gateway_bulkhead_in_flight",
+		"gateway_ratelimit_clients_tracked",
+		"gateway_ratelimit_clients_evicted_total",
+		"gateway_config_reload_rollbacks_total",
 	}
-	if !strings.Contains(bodyStr, "gateway_request_duration_seconds") {
-		t.Error("expected gateway_request_duration_seconds in metrics output")
+	for _, name := range wanted {
+		if !strings.Contains(out, name) {
+			t.Errorf("%s missing from exported metrics", name)
+		}
 	}
-	if !strings.Contains(bodyStr, "gateway_active_connections") {
-		t.Error("expected gateway_active_connections in metrics output")
+	if rec.Code != http.StatusOK {
+		t.Errorf("handler status = %d, want 200", rec.Code)
 	}
 }

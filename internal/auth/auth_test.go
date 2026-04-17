@@ -51,7 +51,7 @@ func TestMiddleware_ValidToken(t *testing.T) {
 	token := makeToken(t, validClaims())
 
 	var capturedClaims *Claims
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			capturedClaims = r.Context().Value(ClaimsKey).(*Claims)
 			w.WriteHeader(http.StatusOK)
@@ -86,7 +86,7 @@ func TestMiddleware_ExpiredToken(t *testing.T) {
 	claims["exp"] = time.Now().Add(-time.Hour).Unix()
 	token := makeToken(t, claims)
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -111,7 +111,7 @@ func TestMiddleware_WrongAudience(t *testing.T) {
 	claims["aud"] = "wrong-audience"
 	token := makeToken(t, claims)
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -136,7 +136,7 @@ func TestMiddleware_WrongIssuer(t *testing.T) {
 	claims["iss"] = "wrong-issuer"
 	token := makeToken(t, claims)
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -161,7 +161,7 @@ func TestMiddleware_MissingScopes(t *testing.T) {
 	claims["scope"] = "read" // missing "write"
 	token := makeToken(t, claims)
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -182,7 +182,7 @@ func TestMiddleware_MalformedToken(t *testing.T) {
 	cfg := testAuthConfig()
 	logger := slog.Default()
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -218,7 +218,7 @@ func TestMiddleware_AuthNotRequired(t *testing.T) {
 	cfg := testAuthConfig()
 	logger := slog.Default()
 
-	handler := Middleware(cfg, func(string) bool { return false }, logger)(
+	handler := Middleware(cfg, func(string) bool { return false }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -239,7 +239,7 @@ func TestMiddleware_AuthDisabled(t *testing.T) {
 	cfg.Enabled = false
 	logger := slog.Default()
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -264,7 +264,7 @@ func TestMiddleware_WrongSigningMethod(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS384, claims)
 	tokenStr, _ := token.SignedString([]byte(testSecret))
 
-	handler := Middleware(cfg, func(string) bool { return true }, logger)(
+	handler := Middleware(cfg, func(string) bool { return true }, logger, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),

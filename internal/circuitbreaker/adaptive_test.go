@@ -7,7 +7,7 @@ import (
 )
 
 func TestAdaptive_TightensThresholdUnderHighLatency(t *testing.T) {
-	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default())
+	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default(), nil)
 	ab := NewAdaptiveBreaker(inner, 0.5, 0.2, 100*time.Millisecond, 1.0)
 
 	// Send high-latency successes to push EWMA above ceiling.
@@ -28,7 +28,7 @@ func TestAdaptive_TightensThresholdUnderHighLatency(t *testing.T) {
 }
 
 func TestAdaptive_RelaxesThresholdUnderNormalLatency(t *testing.T) {
-	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default())
+	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default(), nil)
 	ab := NewAdaptiveBreaker(inner, 0.5, 0.2, 100*time.Millisecond, 0.5)
 
 	// Start with high latency.
@@ -50,7 +50,7 @@ func TestAdaptive_RelaxesThresholdUnderNormalLatency(t *testing.T) {
 }
 
 func TestAdaptive_TripsEarlierWithTightenedThreshold(t *testing.T) {
-	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default())
+	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default(), nil)
 	ab := NewAdaptiveBreaker(inner, 0.5, 0.2, 100*time.Millisecond, 1.0)
 
 	// Push latency high → threshold tightens.
@@ -71,7 +71,7 @@ func TestAdaptive_TripsEarlierWithTightenedThreshold(t *testing.T) {
 }
 
 func TestAdaptive_ResetClearsEWMA(t *testing.T) {
-	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default())
+	inner := NewFailureRateBreaker("test", 4, 0.5, 30*time.Second, 2, slog.Default(), nil)
 	ab := NewAdaptiveBreaker(inner, 0.5, 0.2, 100*time.Millisecond, 1.0)
 
 	ab.RecordSuccess(500 * time.Millisecond) // high latency
@@ -95,7 +95,7 @@ func TestAdaptive_ResetClearsEWMA(t *testing.T) {
 }
 
 func TestAdaptive_DelegatesAllow(t *testing.T) {
-	inner := NewFailureRateBreaker("test", 2, 1.0, 30*time.Second, 1, slog.Default())
+	inner := NewFailureRateBreaker("test", 2, 1.0, 30*time.Second, 1, slog.Default(), nil)
 	ab := NewAdaptiveBreaker(inner, 1.0, 0.2, 100*time.Millisecond, 0.3)
 
 	if !ab.Allow() {

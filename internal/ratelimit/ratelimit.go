@@ -35,31 +35,54 @@ type clientKey struct {
 // Limiter tracks per-client rate limiters and performs periodic cleanup
 // of stale entries.
 type Limiter struct {
-	mu           sync.RWMutex
-	clients      map[clientKey]*client
-	rate         rate.Limit
-	burst        int
-	routes       []config.RouteConfig
-	trustedCIDRs []*net.IPNet
-	logger       *slog.Logger
-	stopCh       chan struct{}
+	mu              sync.RWMutex
+	clients         map[clientKey]*client
+	rate            rate.Limit
+	burst           int
+	routes          []config.RouteConfig
+	trustedCIDRs    []*net.IPNet
+	idleTTL         time.Duration
+	cleanupInterval time.Duration
+	logger          *slog.Logger
+	metrics         *metrics.Metrics
+	stopCh          chan struct{}
+	doneCh          chan struct{} // closed when janitor returns
 }
+
+// evictBatchSize caps the number of clients deleted under a single write lock
+// to keep the hot path unblocked during large evictions (DP-005).
+const evictBatchSize = 256
 
 
 // New creates a new Limiter with the given global rate limit settings and
-// route-level overrides. It starts a background goroutine that cleans up
-// stale client entries every minute. trustedProxies is a list of CIDR strings
-// (e.g. "10.0.0.0/8") whose X-Forwarded-For headers are trusted.
-func New(cfg config.RateLimitConfig, routes []config.RouteConfig, trustedProxies []string, logger *slog.Logger) *Limiter {
+// route-level overrides. It starts a background janitor that evicts idle
+// client entries at cfg.CleanupInterval; stop it with Close(). trustedProxies
+// is a list of CIDR strings (e.g. "10.0.0.0/8") whose X-Forwarded-For headers
+// are trusted.
+func New(cfg config.RateLimitConfig, routes []config.RouteConfig, trustedProxies []string, logger *slog.Logger, m *metrics.Metrics) *Limiter {
 	cidrs := parseCIDRs(trustedProxies, logger)
+	// Defensive defaults: configs routed through config.Load already have
+	// these applied, but direct callers (tests, embedding) may pass zeros.
+	idleTTL := cfg.IdleTTL
+	if idleTTL <= 0 {
+		idleTTL = 10 * time.Minute
+	}
+	cleanupInterval := cfg.CleanupInterval
+	if cleanupInterval <= 0 {
+		cleanupInterval = time.Minute
+	}
 	l := &Limiter{
-		clients:      make(map[clientKey]*client),
-		rate:         rate.Limit(cfg.RequestsPerSecond),
-		burst:        cfg.BurstSize,
-		routes:       routes,
-		trustedCIDRs: cidrs,
-		logger:       logger,
-		stopCh:       make(chan struct{}),
+		clients:         make(map[clientKey]*client),
+		rate:            rate.Limit(cfg.RequestsPerSecond),
+		burst:           cfg.BurstSize,
+		routes:          routes,
+		trustedCIDRs:    cidrs,
+		idleTTL:         idleTTL,
+		cleanupInterval: cleanupInterval,
+		logger:          logger,
+		metrics:         m,
+		stopCh:          make(chan struct{}),
+		doneCh:          make(chan struct{}),
 	}
 	go l.cleanup()
 	return l
@@ -78,9 +101,19 @@ func parseCIDRs(cidrs []string, logger *slog.Logger) []*net.IPNet {
 	return nets
 }
 
-// Stop terminates the background cleanup goroutine.
-func (l *Limiter) Stop() {
-	close(l.stopCh)
+// Stop terminates the background cleanup goroutine. Alias for Close.
+func (l *Limiter) Stop() { l.Close() }
+
+// Close terminates the background janitor and waits for it to exit.
+// Safe to call more than once.
+func (l *Limiter) Close() {
+	select {
+	case <-l.stopCh:
+		// already closed
+	default:
+		close(l.stopCh)
+	}
+	<-l.doneCh
 }
 
 // UpdateConfig hot-reloads the global rate limit settings and route overrides.
@@ -110,7 +143,9 @@ func (l *Limiter) Middleware() func(http.Handler) http.Handler {
 			limiter := l.getLimiter(ip, rateLimit, burst)
 			if !limiter.Allow() {
 				l.logger.Warn("rate limit exceeded", "client_ip", ip, "path", r.URL.Path)
-				metrics.RateLimitHits.WithLabelValues(routePrefix).Inc()
+				if l.metrics != nil {
+					l.metrics.RateLimitHits.WithLabelValues(routePrefix).Inc()
+				}
 				retryAfter := strconv.FormatFloat(1.0/float64(rateLimit), 'f', 0, 64)
 				w.Header().Set("Retry-After", retryAfter)
 				apierror.WriteJSON(w, r, http.StatusTooManyRequests, apierror.RateLimitExceeded, "rate limit exceeded, retry later")
@@ -198,10 +233,11 @@ func (l *Limiter) getLimiter(ip string, r rate.Limit, burst int) *rate.Limiter {
 	// Fast path: read-lock for existing clients (the common case).
 	l.mu.RLock()
 	if c, exists := l.clients[key]; exists {
-		// Avoid time.Now() on every hit — only update lastSeen if stale.
-		// The cleanup threshold is 3 minutes; refreshing once per minute
-		// is sufficient to prevent eviction.
-		if time.Since(c.lastSeen) > 1*time.Minute {
+		// Avoid time.Now() on every hit — only refresh lastSeen when
+		// its age exceeds half the idle TTL, which still leaves ample
+		// margin before the janitor considers the entry stale.
+		refreshThreshold := l.idleTTL / 2
+		if time.Since(c.lastSeen) > refreshThreshold {
 			l.mu.RUnlock()
 			l.mu.Lock()
 			c.lastSeen = time.Now()
@@ -228,23 +264,73 @@ func (l *Limiter) getLimiter(ip string, r rate.Limit, burst int) *rate.Limiter {
 	return limiter
 }
 
+// cleanup runs the janitor loop until stopCh closes. Each tick: scan the
+// client map under RLock collecting expired keys, then delete in write-lock
+// batches of evictBatchSize to avoid starving the hot path on large evictions.
 func (l *Limiter) cleanup() {
-	ticker := time.NewTicker(1 * time.Minute)
+	defer close(l.doneCh)
+	ticker := time.NewTicker(l.cleanupInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			l.mu.Lock()
-			for key, c := range l.clients {
-				if time.Since(c.lastSeen) > 3*time.Minute {
-					delete(l.clients, key)
-				}
-			}
-			l.mu.Unlock()
+			l.evictOnce(time.Now())
 		case <-l.stopCh:
 			return
 		}
 	}
+}
+
+// evictOnce performs one janitor pass. Exposed for testing; safe for concurrent
+// use with the request path.
+func (l *Limiter) evictOnce(now time.Time) {
+	// Phase 1: read-lock scan — collect expired keys without blocking readers.
+	l.mu.RLock()
+	expired := make([]clientKey, 0, len(l.clients)/4)
+	for key, c := range l.clients {
+		if now.Sub(c.lastSeen) > l.idleTTL {
+			expired = append(expired, key)
+		}
+	}
+	l.mu.RUnlock()
+
+	if len(expired) == 0 {
+		l.updateTrackedGauge()
+		return
+	}
+
+	// Phase 2: write-lock batched deletes. Re-check lastSeen under the lock
+	// so concurrent traffic that just refreshed a key does not lose it.
+	var evicted int
+	for start := 0; start < len(expired); start += evictBatchSize {
+		end := start + evictBatchSize
+		if end > len(expired) {
+			end = len(expired)
+		}
+		l.mu.Lock()
+		for _, key := range expired[start:end] {
+			if c, ok := l.clients[key]; ok && now.Sub(c.lastSeen) > l.idleTTL {
+				delete(l.clients, key)
+				evicted++
+			}
+		}
+		l.mu.Unlock()
+	}
+
+	if evicted > 0 && l.metrics != nil {
+		l.metrics.RateLimitClientsEvicted.Add(float64(evicted))
+	}
+	l.updateTrackedGauge()
+}
+
+func (l *Limiter) updateTrackedGauge() {
+	if l.metrics == nil {
+		return
+	}
+	l.mu.RLock()
+	n := len(l.clients)
+	l.mu.RUnlock()
+	l.metrics.RateLimitClientsTracked.Set(float64(n))
 }
 
 // LimiterEntry is a snapshot of a single rate limiter client for admin inspection.

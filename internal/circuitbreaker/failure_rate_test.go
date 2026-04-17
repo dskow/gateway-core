@@ -5,17 +5,10 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/dskow/gateway-core/internal/metrics"
 )
 
-func init() {
-	// Register metrics once for all tests in this package.
-	metrics.Init()
-}
-
 func newTestBreaker(windowSize int, threshold float64, resetTimeout time.Duration, halfOpenMax int) *FailureRateBreaker {
-	return NewFailureRateBreaker("http://test:8080", windowSize, threshold, resetTimeout, halfOpenMax, slog.Default())
+	return NewFailureRateBreaker("http://test:8080", windowSize, threshold, resetTimeout, halfOpenMax, slog.Default(), nil)
 }
 
 func TestFailureRate_StartsClosedAndAllows(t *testing.T) {

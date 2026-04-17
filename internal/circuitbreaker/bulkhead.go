@@ -13,15 +13,23 @@ type BulkheadBreaker struct {
 	inner   Breaker
 	sem     chan struct{}
 	backend string
+	metrics *metrics.Metrics
 }
 
 // NewBulkheadBreaker creates a concurrency-limiting breaker that allows at most
-// maxConcurrent in-flight requests before rejecting.
-func NewBulkheadBreaker(inner Breaker, maxConcurrent int, backend string) *BulkheadBreaker {
+// maxConcurrent in-flight requests before rejecting. m may be nil for tests.
+func NewBulkheadBreaker(inner Breaker, maxConcurrent int, backend string, m *metrics.Metrics) *BulkheadBreaker {
 	return &BulkheadBreaker{
 		inner:   inner,
 		sem:     make(chan struct{}, maxConcurrent),
 		backend: backend,
+		metrics: m,
+	}
+}
+
+func (b *BulkheadBreaker) recordInFlight() {
+	if b.metrics != nil {
+		b.metrics.BulkheadInFlight.WithLabelValues(b.backend).Set(float64(len(b.sem)))
 	}
 }
 
@@ -32,17 +40,19 @@ func (b *BulkheadBreaker) Allow() bool {
 	select {
 	case b.sem <- struct{}{}:
 		// Acquired slot — check inner breaker.
-		metrics.BulkheadInFlight.WithLabelValues(b.backend).Set(float64(len(b.sem)))
+		b.recordInFlight()
 		if !b.inner.Allow() {
 			// Inner breaker rejected — release slot immediately.
 			<-b.sem
-			metrics.BulkheadInFlight.WithLabelValues(b.backend).Set(float64(len(b.sem)))
+			b.recordInFlight()
 			return false
 		}
 		return true
 	default:
 		// Concurrency limit reached.
-		metrics.BulkheadRejections.WithLabelValues(b.backend).Inc()
+		if b.metrics != nil {
+			b.metrics.BulkheadRejections.WithLabelValues(b.backend).Inc()
+		}
 		return false
 	}
 }
@@ -51,7 +61,7 @@ func (b *BulkheadBreaker) Allow() bool {
 // exactly once for every Allow() that returned true.
 func (b *BulkheadBreaker) Release() {
 	<-b.sem
-	metrics.BulkheadInFlight.WithLabelValues(b.backend).Set(float64(len(b.sem)))
+	b.recordInFlight()
 }
 
 func (b *BulkheadBreaker) RecordSuccess(latency time.Duration) {
