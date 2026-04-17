@@ -34,12 +34,39 @@ var responseBufferPool = sync.Pool{
 
 // Router matches incoming requests to configured routes and proxies
 // them to the appropriate backend.
+//
+// Proxies are keyed by backend identity (normalized scheme://host:port[/path])
+// rather than by PathPrefix, so two routes sharing a backend reuse the same
+// *httputil.ReverseProxy — and therefore the same Transport and connection
+// pool — instead of each allocating its own. routeBackendKey lets the request
+// path resolve route → backend key → proxy.
 type Router struct {
-	routes     []config.RouteConfig
-	proxies    map[string]*httputil.ReverseProxy
-	breakers   map[string]*circuitbreaker.CompositeBreaker
-	methodSets map[string]map[string]bool // pathPrefix → allowed methods (upper-case)
-	logger     *slog.Logger
+	routes          []config.RouteConfig
+	proxies         map[string]*httputil.ReverseProxy
+	routeBackendKey map[string]string // pathPrefix → backend key into proxies
+	breakers        map[string]*circuitbreaker.CompositeBreaker
+	methodSets      map[string]map[string]bool // pathPrefix → allowed methods (upper-case)
+	logger          *slog.Logger
+}
+
+// backendKey returns a stable identity key for a backend URL. Two routes
+// whose parsed backend URLs agree on scheme, host, port, and path produce
+// the same key and will share a single *httputil.ReverseProxy.
+func backendKey(u *url.URL) string {
+	host := u.Host
+	if !strings.Contains(host, ":") {
+		switch u.Scheme {
+		case "https":
+			host += ":443"
+		default:
+			host += ":80"
+		}
+	}
+	// Preserve path: routes targeting the same host:port but different
+	// backend paths must keep separate proxies because the Director
+	// prepends the target's path to each request.
+	path := strings.TrimRight(u.Path, "/")
+	return u.Scheme + "://" + host + path
 }
 
 // New creates a Router from the given route configurations. Routes are
@@ -53,10 +80,25 @@ func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.Compos
 	})
 
 	proxies := make(map[string]*httputil.ReverseProxy, len(routes))
+	routeBackendKey := make(map[string]string, len(sorted))
 	for _, route := range sorted {
 		target, err := url.Parse(route.Backend)
 		if err != nil {
 			return nil, fmt.Errorf("invalid backend URL %q for route %q: %w", route.Backend, route.PathPrefix, err)
+		}
+		key := backendKey(target)
+		routeBackendKey[route.PathPrefix] = key
+		if _, exists := proxies[key]; exists {
+			// Another route already built this proxy. Reusing it is the
+			// whole point — one Transport and one connection pool per
+			// backend. If a later route specified a different
+			// ConnectionPool, the first wins; warn so the config error
+			// is visible instead of silently ignored.
+			if route.ConnectionPool != nil {
+				logger.Warn("ignoring connection_pool override for shared backend",
+					"path_prefix", route.PathPrefix, "backend", route.Backend)
+			}
+			continue
 		}
 		rte := route // capture for closure
 		proxy := httputil.NewSingleHostReverseProxy(target)
@@ -68,7 +110,7 @@ func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.Compos
 			logger.Error("proxy error", "error", err, "backend", rte.Backend, "path", r.URL.Path)
 			apierror.WriteJSON(w, r, http.StatusBadGateway, apierror.UpstreamUnavailable, "upstream service unavailable")
 		}
-		proxies[route.PathPrefix] = proxy
+		proxies[key] = proxy
 	}
 
 	// Pre-build method sets for O(1) method validation (P7).
@@ -84,11 +126,12 @@ func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.Compos
 	}
 
 	return &Router{
-		routes:     sorted,
-		proxies:    proxies,
-		breakers:   breakers,
-		methodSets: methodSets,
-		logger:     logger,
+		routes:          sorted,
+		proxies:         proxies,
+		routeBackendKey: routeBackendKey,
+		breakers:        breakers,
+		methodSets:      methodSets,
+		logger:          logger,
 	}, nil
 }
 
@@ -164,7 +207,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	metrics.ActiveConnections.Inc()
 	defer metrics.ActiveConnections.Dec()
 
-	proxy := rt.proxies[route.PathPrefix]
+	proxy := rt.proxies[rt.routeBackendKey[route.PathPrefix]]
 
 	for k, v := range route.Headers {
 		r.Header.Set(k, v)

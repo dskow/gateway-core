@@ -288,3 +288,83 @@ func TestRouter_PathBoundaryEnforcement(t *testing.T) {
 		t.Errorf("/apiary: expected 404, got %d", rec3.Code)
 	}
 }
+
+// DP-008: Two routes pointing to the same backend must share exactly one
+// *httputil.ReverseProxy so they share a Transport and its connection pool.
+func TestRouter_SharesProxyAcrossRoutesWithSameBackend(t *testing.T) {
+	backend := httptest.NewServer(echoHandler())
+	defer backend.Close()
+
+	routes := []config.RouteConfig{
+		{PathPrefix: "/api/users", Backend: backend.URL, TimeoutMs: 5000},
+		{PathPrefix: "/api/orders", Backend: backend.URL, TimeoutMs: 5000},
+		{PathPrefix: "/api", Backend: backend.URL, TimeoutMs: 5000},
+	}
+	router, err := New(routes, nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(router.proxies); got != 1 {
+		t.Fatalf("expected 1 shared proxy for identical backends, got %d", got)
+	}
+
+	// All three PathPrefixes must resolve to the same backend key.
+	keys := map[string]struct{}{}
+	for _, pp := range []string{"/api/users", "/api/orders", "/api"} {
+		keys[router.routeBackendKey[pp]] = struct{}{}
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected all three routes to share one backend key, got %d distinct", len(keys))
+	}
+
+	// Sanity: requests still route correctly through the shared proxy.
+	for _, path := range []string{"/api", "/api/users/1", "/api/orders/9"} {
+		req := httptest.NewRequest("GET", path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("path %s: expected 200, got %d", path, rec.Code)
+		}
+	}
+}
+
+// Different backends still get distinct proxies — the 1:1 case is unchanged.
+func TestRouter_DistinctProxiesForDistinctBackends(t *testing.T) {
+	a := httptest.NewServer(echoHandler())
+	defer a.Close()
+	b := httptest.NewServer(echoHandler())
+	defer b.Close()
+
+	routes := []config.RouteConfig{
+		{PathPrefix: "/a", Backend: a.URL, TimeoutMs: 5000},
+		{PathPrefix: "/b", Backend: b.URL, TimeoutMs: 5000},
+	}
+	router, err := New(routes, nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(router.proxies); got != 2 {
+		t.Fatalf("expected 2 proxies for 2 distinct backends, got %d", got)
+	}
+	if router.routeBackendKey["/a"] == router.routeBackendKey["/b"] {
+		t.Fatal("distinct backends must produce distinct keys")
+	}
+}
+
+// Backends on the same host:port but different paths must still get
+// distinct proxies — the Director prepends the target path to each request.
+func TestRouter_DistinctProxiesForSameHostDifferentPath(t *testing.T) {
+	routes := []config.RouteConfig{
+		{PathPrefix: "/v1", Backend: "http://api.example.com:8080/v1", TimeoutMs: 5000},
+		{PathPrefix: "/v2", Backend: "http://api.example.com:8080/v2", TimeoutMs: 5000},
+	}
+	router, err := New(routes, nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(router.proxies); got != 2 {
+		t.Fatalf("different backend paths must not collapse: got %d proxies", got)
+	}
+}
