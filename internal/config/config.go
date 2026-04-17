@@ -183,27 +183,18 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
-
-	expanded := expandEnvVars(string(data))
-
-	var cfg Config
-	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
-	}
-
-	applyDefaults(&cfg)
-
-	if err := validate(&cfg); err != nil {
-		return nil, fmt.Errorf("validating config: %w", err)
-	}
-
-	cfg.Warnings = collectWarnings(&cfg)
-
-	return &cfg, nil
+	return load(data)
 }
 
 // LoadFromBytes parses configuration from raw YAML bytes. Useful for testing.
 func LoadFromBytes(data []byte) (*Config, error) {
+	return load(data)
+}
+
+// load is the shared pipeline behind Load and LoadFromBytes: expand env vars,
+// unmarshal, apply defaults, validate, collect warnings. Keeping it private
+// ensures both entry points stay in lockstep as the pipeline evolves.
+func load(data []byte) (*Config, error) {
 	expanded := expandEnvVars(string(data))
 
 	var cfg Config
