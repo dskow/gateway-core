@@ -75,13 +75,13 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
 - **Depends on**: DP-003 (preferred — observers become methods on `*Gateway` rather than closures in `main()`). Can be delivered standalone if DP-003 slips.
 - **Files**: [`internal/config/reload.go`](../internal/config/reload.go), [`cmd/gateway/main.go`](../cmd/gateway/main.go)
 - **Acceptance criteria**:
-  - [ ] `type ConfigObserver interface { OnReload(old, new *config.Config) error }`
-  - [ ] `Reloader.Reload()` rolls back `r.current` to `old` on any observer error.
-  - [ ] Integration test: observer returning an error leaves `Reloader.Current()` unchanged.
-  - [ ] Integration test: panic in observer is recovered, logged, counted as rollback.
-  - [ ] Prometheus counter `gateway_config_reload_rollbacks_total{reason}`.
-  - [ ] Zero regressions in existing hot-reload tests.
-- **Status**: ☐ Not started
+  - [x] `type ConfigObserver interface { OnReload(old, new *config.Config) error }` in [`internal/config/reload.go`](../internal/config/reload.go).
+  - [x] `Reloader.Reload()` rolls back `r.current` to `old` on any observer error.
+  - [x] Integration test: observer returning an error leaves `Reloader.Current()` unchanged (`TestReloader_ObserverErrorRollsBack`).
+  - [x] Integration test: panic in observer is recovered, logged, counted as rollback (`TestReloader_ObserverPanicRollsBack`).
+  - [x] Prometheus counter `gateway_config_reload_rollbacks_total{reason}` on `*Metrics` with stable `observer_error` / `observer_panic` labels (detail goes to logs to keep counter cardinality bounded).
+  - [x] Zero regressions in existing hot-reload tests.
+- **Status**: ☑ Complete (2026-04-17)
 
 ---
 
@@ -95,13 +95,13 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
 - **Depends on**: —
 - **Files**: [`internal/metrics/metrics.go`](../internal/metrics/metrics.go) + every handler and middleware that reads/writes the globals.
 - **Acceptance criteria**:
-  - [ ] `type Metrics struct { ... }` with public collector fields.
-  - [ ] `func New(reg prometheus.Registerer) *Metrics` — single constructor, no `Init()`.
-  - [ ] All call sites receive `*Metrics` via constructor or middleware factory.
-  - [ ] No package-level `var` referring to `prometheus.*` in `internal/metrics`.
-  - [ ] Unit test: two `*Metrics` instances can coexist (proves no global state).
-  - [ ] Backward-compatible Prometheus registration surface (same metric names and labels).
-- **Status**: ☐ Not started
+  - [x] `type Metrics struct { ... }` with public collector fields ([`internal/metrics/metrics.go`](../internal/metrics/metrics.go)).
+  - [x] `func New(reg prometheus.Registerer) *Metrics` — single constructor, no `Init()`.
+  - [x] All call sites receive `*Metrics` via constructor or middleware factory (proxy, ratelimit, auth, circuit breakers).
+  - [x] No package-level `var` referring to `prometheus.*` in `internal/metrics`.
+  - [x] Unit test: two `*Metrics` instances can coexist (`TestMetrics_TwoInstancesCoexist`).
+  - [x] Backward-compatible Prometheus registration surface (`TestMetrics_ExposesExpectedCollectorNames`).
+- **Status**: ☑ Complete (2026-04-17)
 
 ---
 
@@ -115,13 +115,13 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
 - **Depends on**: DP-002 (so `*Metrics` is a struct field, not a global)
 - **Files**: new [`internal/gateway/gateway.go`](../internal/gateway/gateway.go) (proposed), [`cmd/gateway/main.go`](../cmd/gateway/main.go) (becomes ~30 lines)
 - **Acceptance criteria**:
-  - [ ] `type Gateway struct { Config, Logger, Metrics, Router, Limiter, Breakers, Reloader, Server }`.
-  - [ ] `func NewGateway(ctx, cfg, logger) (*Gateway, error)` — constructs components in dependency order.
-  - [ ] `(*Gateway).Run(ctx) error` — owns the HTTP server lifecycle and graceful shutdown.
-  - [ ] `main()` fits on one screen: flag parsing → `NewGateway` → `gw.Run(ctx)`.
-  - [ ] `Gateway` implements `ConfigObserver` (enables DP-001 cleanly).
-  - [ ] Table-driven end-to-end test that constructs a `Gateway` with fakes and issues requests in-process.
-- **Status**: ☐ Not started
+  - [x] `type Gateway struct { Config, Logger, Metrics, Router, Limiter, Breakers, Reloader, Health, Admin, Server }` in [`internal/gateway/gateway.go`](../internal/gateway/gateway.go).
+  - [x] `func NewGateway(ctx, cfg, logger, opts) (*Gateway, error)` — constructs components in strict dependency order (Metrics → Breakers → Router → Limiter → middleware stack → mux → Reloader → Server).
+  - [x] `(*Gateway).Run(ctx) error` — owns the HTTP server lifecycle; graceful shutdown bounded by `cfg.Server.ShutdownTimeout`.
+  - [x] `main()` fits on one screen: flag parsing → `config.Load` → logger → `NewGateway` → `gw.Run(ctx)`.
+  - [x] `Gateway` implements `ConfigObserver` (used by DP-001; the limiter + breakers + routes atom are updated idempotently in `OnReload`).
+  - [x] Table-driven end-to-end test (`TestGateway_EndToEnd`) plus `TestGateway_IsolatedMetricsRegistry`.
+- **Status**: ☑ Complete (2026-04-17)
 
 ---
 
@@ -155,12 +155,12 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
 - **Depends on**: —
 - **Files**: [`internal/ratelimit/ratelimit.go`](../internal/ratelimit/ratelimit.go)
 - **Acceptance criteria**:
-  - [ ] Configurable TTL for idle client entries (default e.g. `10 * burst-refill window` or 10 minutes, whichever is larger).
-  - [ ] Background janitor goroutine started by `ratelimit.New`, stopped by a `Close()` method.
-  - [ ] Eviction is O(n) amortized and runs at a cadence that does not impact the hot path (RLock for scan, Lock for deletion batch).
-  - [ ] Prometheus gauge `gateway_ratelimit_clients_tracked` + counter `gateway_ratelimit_clients_evicted_total`.
-  - [ ] Load test: sustained 10k unique client IPs/sec for 10 minutes does not grow memory past bounded envelope.
-- **Status**: ☐ Not started
+  - [x] Configurable TTL for idle client entries (`RateLimitConfig.IdleTTL`, default `max(10 × burst-refill window, 10 minutes)`).
+  - [x] Background janitor goroutine started by `ratelimit.New`, stopped by a `Close()` method (alias: `Stop`).
+  - [x] Eviction is O(n) amortized: scan under RLock, delete under Lock in `evictBatchSize` batches; batched delete re-checks `lastSeen` to handle concurrent refreshes.
+  - [x] `gateway_ratelimit_clients_tracked` gauge + `gateway_ratelimit_clients_evicted_total` counter on `*Metrics`.
+  - [ ] Load test: sustained 10k unique client IPs/sec for 10 minutes does not grow memory past bounded envelope. *(deferred — Phase 1 gate is unit-level proof of the bounded-envelope property via `TestLimiter_JanitorEvictsIdleClients` / `TestLimiter_JanitorSparesActiveClients`; a soak test belongs with the Phase 5 benchmark gate.)*
+- **Status**: ☑ Code complete (2026-04-17); soak test deferred to benchmark sprint.
 
 ---
 
@@ -264,6 +264,8 @@ The load-bearing set. Ordered so each step reduces risk for the next.
 
 **Exit criteria**: Phase 1 integration suite green; rollback counter and clients-tracked gauge visible in Prometheus; `main()` ≤ 40 LoC.
 
+**Status**: ☑ Code complete 2026-04-17 — all four items landed; `go test ./...` green across every package. `main()` body is ~40 LoC (flag parse → config load → logger → signal ctx → `NewGateway` → `gw.Run`). Soak test for DP-005 deferred to the benchmark sprint.
+
 ---
 
 ### **Phase 2 — Observability (Q2 theme)**
@@ -297,10 +299,10 @@ Check items as PRs merge.
 
 ### **Phase 1 — Deterministic core hardening**
 
-- [ ] **DP-005** — Steady State janitor on `ratelimit.Limiter`
-- [ ] **DP-002** — Metrics as injected `*Metrics` struct
-- [ ] **DP-003** — `Gateway` struct replaces `main()` wiring
-- [ ] **DP-001** — `ConfigObserver` with error return and rollback
+- [x] **DP-005** — Steady State janitor on `ratelimit.Limiter` *(2026-04-17; soak deferred)*
+- [x] **DP-002** — Metrics as injected `*Metrics` struct *(2026-04-17)*
+- [x] **DP-003** — `Gateway` struct replaces `main()` wiring *(2026-04-17)*
+- [x] **DP-001** — `ConfigObserver` with error return and rollback *(2026-04-17)*
 
 ### **Phase 2 — Observability**
 
@@ -336,6 +338,10 @@ Check items as PRs merge.
 | 2026-04-17 | DP-007 | Private `load([]byte)` helper replaces duplicated pipeline in `Load` and `LoadFromBytes`. | Single source of truth for the expand → unmarshal → defaults → validate → warnings pipeline; both entry points stay in lockstep as steps are added (e.g. tracing config). |
 | 2026-04-17 | DP-006 | `CompositeBreaker` exposes `InnerState()` and `EffectiveState()`; `State()` aliases `InnerState()` for backward compat. | `State()` is referenced by the admin snapshot and metrics paths — keeping it as the failure-rate view preserves existing telemetry. `/ready` switches to `EffectiveState()` so a saturated bulkhead correctly marks the route unhealthy. |
 | 2026-04-17 | DP-008 | Proxy map keyed by normalized backend identity (`scheme://host:port` + path, via `backendKey`). | Two routes with identical `Backend` strings now share one `*httputil.ReverseProxy` + `Transport`. Path kept in the key so `http://api:8080/v1` and `http://api:8080/v2` retain separate Directors — the stdlib proxy prepends target path to each request. Later routes' `ConnectionPool` overrides on a shared backend are logged as warnings (first-wins). |
+| 2026-04-17 | DP-005 | `RateLimitConfig.IdleTTL` + `CleanupInterval` with `max(10×burst-refill, 10min)` default; scan under RLock, delete under Lock in 256-batch chunks with re-check. | Prevents per-IP memory growth under adversarial traffic without blocking the hot path during large evictions. Re-check under write lock handles the race where an active client refreshes `lastSeen` between scan and delete. `Close()` added (with `Stop` kept as alias) to make shutdown deterministic for the new Gateway lifecycle. |
+| 2026-04-17 | DP-002 | `metrics.New(reg)` returns `*Metrics`; package-level globals + `Init()` removed; collectors injected into proxy / ratelimit / auth / circuit breakers; `metrics.Handler(gatherer)` takes an explicit Gatherer. | Kills the double-`Init` panic and makes test isolation free (`metrics.NewForTest()`). Subsystems accept `nil *Metrics` to keep their tests minimal — a justified tradeoff since the alternative (nil-safe wrapper type) adds more code than a handful of nil guards. Collector names and labels are unchanged so existing scrape configs keep working. |
+| 2026-04-17 | DP-003 | `internal/gateway.Gateway` owns every long-lived component; `main()` shrinks to flag-parse + logger + `NewGateway` + `Run`. `Run` uses `signal.NotifyContext` for SIGINT/SIGTERM-driven graceful shutdown. | Restores testability — the full request path is now exercisable in-process with `gw.Handler()` and a fresh `prometheus.NewRegistry()`. Also unblocks DP-001: `Gateway` registers itself as a `ConfigObserver` so the limiter/breaker/routes hot-reload goes through the rollback pipeline instead of a fire-and-forget closure. `config.Reloader.SetPath` added to let Gateway be built before the final config path is known (in tests). |
+| 2026-04-17 | DP-001 | `ConfigObserver.OnReload(old, new) error` with panic recovery; rollback restores only `r.current` (observers must be idempotent per the plan's Risk Register). Rollback reasons are the low-cardinality labels `observer_error` / `observer_panic`; full error text / panic value goes to the log, not the Prometheus label. | Low-cardinality labels keep `gateway_config_reload_rollbacks_total{reason}` safe to alert on. Legacy `OnReload(func(*Config))` callbacks preserved for fire-and-forget hooks (admin snapshots, cert reload) but now run *after* every observer has accepted, so a rejected reload does not half-apply to logging/snapshot sinks. Counter is wired through an interface (`RollbackRecorder`) so `internal/config` does not import `internal/metrics`, which keeps the cycle graph clean as more subsystems grow reload needs. |
 
 ---
 
