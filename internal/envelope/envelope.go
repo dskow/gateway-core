@@ -20,24 +20,55 @@ var ErrFallback = errors.New("envelope: autonomous-safe fallback; no agent pipel
 // Envelope is safe for concurrent use. Submit must not block on, depend on,
 // or mutate the data path; callers may invoke it from any goroutine.
 type Envelope struct {
-	now func() time.Time
+	now         func() time.Time
+	constraints *ConstraintRegistry
+}
+
+// Option configures an Envelope at construction time. Options are
+// additive; each enables a single pipeline stage. Until every stage is
+// available the Envelope still rejects unmatched proposals at the
+// fallback stage — wiring up a stage never weakens the autonomous-safe
+// contract, it only produces clearer rejection reasons.
+type Option func(*Envelope)
+
+// WithConstraints installs the immutable-constraints stage. Constraints
+// run first in the pipeline; a violation short-circuits with stage
+// "constraints" and the violation's structured reason. A nil registry
+// disables the stage (equivalent to omitting the option).
+func WithConstraints(r *ConstraintRegistry) Option {
+	return func(e *Envelope) { e.constraints = r }
+}
+
+// New returns an Envelope configured with the given options. With no
+// options it is equivalent to NewAutonomousSafe: every proposal is
+// rejected at the fallback stage.
+func New(opts ...Option) *Envelope {
+	e := &Envelope{now: time.Now}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(e)
+		}
+	}
+	return e
 }
 
 // NewAutonomousSafe returns an Envelope that rejects every proposal with
-// ErrFallback. This is the only mode currently implemented; additional
-// constructors will be introduced as the pipeline stages are built.
+// ErrFallback. It is equivalent to New() with no options and is preserved
+// as a named constructor because the pattern's autonomous-safe default is
+// itself a documented mode, not just an empty configuration.
 func NewAutonomousSafe() *Envelope {
-	return &Envelope{now: time.Now}
+	return New()
 }
 
 // Submit hands a Proposal to the Envelope and returns the resulting
-// Decision. The current implementation always returns DecisionReject with
-// reason ErrFallback; future implementations will route the proposal
-// through Constraints → Bounds → Dampener → Shadow before returning.
+// Decision. The pipeline runs in fixed order:
 //
-// Submit honors context cancellation: a cancelled context returns a
-// DecisionDefer with the context's error as the reason and a RetryAfter of
-// zero (the caller decides when to retry).
+//  1. context cancellation  → DecisionDefer, stage "intake"
+//  2. constraints (if any)  → DecisionReject, stage "constraints"
+//  3. fallback              → DecisionReject, stage "fallback"
+//
+// Later stages (bounds, dampener, shadow) will slot in between
+// constraints and fallback as they are built.
 func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 	now := e.timeNow()
 	if err := ctx.Err(); err != nil {
@@ -46,6 +77,16 @@ func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 			Stage:     "intake",
 			Reason:    err.Error(),
 			DecidedAt: now,
+		}
+	}
+	if e != nil && e.constraints != nil {
+		if err := e.constraints.Evaluate(p); err != nil {
+			return Decision{
+				Kind:      DecisionReject,
+				Stage:     "constraints",
+				Reason:    err.Error(),
+				DecidedAt: now,
+			}
 		}
 	}
 	return Decision{

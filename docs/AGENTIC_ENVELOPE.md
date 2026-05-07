@@ -212,17 +212,22 @@ prompt is not immutable.
 | Composable circuit breakers (FailureRate / Adaptive / Timeout / Bulkhead) | **Built** — concrete instance of "operator-authored bounded behavior under load." | `internal/circuitbreaker/` |
 | Autonomous-safe fallback as default behavior | **Built** — the gateway runs with no agents at all today; the agent path is purely additive. | (entire codebase) |
 | `internal/envelope/` package skeleton | **Built** — `Envelope` type, `Proposal` and `Decision` types, no-op `ShadowRunner`, default policy that rejects all proposals (the autonomous-safe default). | `internal/envelope/` |
-| Immutable constraint registry | **Designed**, not built. | — |
+| Immutable constraint registry | **Built** — `Constraint` interface, `ConstraintRegistry`, `DefaultConstraints()` (well-formedness baseline), wired as the first pipeline stage via `WithConstraints`. Violations short-circuit at stage `"constraints"` with a structured `*ConstraintViolation`; passing proposals fall through to fallback until later stages exist. | `internal/envelope/constraints.go` |
 | Bounded delta enforcement | **Designed**, not built. | — |
 | Dampener (hysteresis + cooldown) | **Designed**, not built. | — |
 | Shadow simulator (traffic replay) | **Designed**, not built. | — |
 | Multi-agent pipeline (Planner / Verifier / Safety / Observer) | **Designed**, not built. | — |
 
-The package skeleton is intentionally an autonomous-safe default: until the
-remaining stages are implemented, every proposal is rejected. This matches
-the pattern's central claim — the deterministic core works without agents,
+The package is intentionally an autonomous-safe default: until the
+remaining stages are implemented, every proposal that does not violate a
+constraint still falls through to a fallback rejection. This matches the
+pattern's central claim — the deterministic core works without agents,
 and agents are added incrementally without ever putting the data path at
-risk.
+risk. The constraints stage gives clearer rejection reasons for malformed
+or unconstitutional proposals (e.g., a non-positive rate-limit value is
+rejected at stage `constraints` with reason `rate_limit.positive:
+non_positive_value`); it does not weaken the autonomous-safe contract,
+because nothing in the deterministic core ever observes the rejection.
 
 ## 10. Related Work
 

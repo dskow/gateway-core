@@ -91,3 +91,92 @@ func TestSubmitStampsDecidedAt(t *testing.T) {
 		t.Fatalf("DecidedAt = %v, want %v", d.DecidedAt, fixed)
 	}
 }
+
+func TestNewWithNoOptionsMatchesAutonomousSafe(t *testing.T) {
+	t.Parallel()
+
+	e := New()
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
+	if d.Kind != DecisionReject || d.Stage != "fallback" {
+		t.Fatalf("New() with no options must reject at fallback; got kind=%s stage=%q", d.Kind, d.Stage)
+	}
+}
+
+func TestSubmitRunsConstraintsBeforeFallback(t *testing.T) {
+	t.Parallel()
+
+	r := NewConstraintRegistry()
+	r.Register(constraintFunc{
+		name: "test.always_fails",
+		eval: func(Proposal) error {
+			return &ConstraintViolation{Constraint: "test.always_fails", Reason: "by_design"}
+		},
+	})
+
+	e := New(WithConstraints(r))
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
+	if d.Kind != DecisionReject {
+		t.Fatalf("expected reject, got %s", d.Kind)
+	}
+	if d.Stage != "constraints" {
+		t.Fatalf("expected stage=constraints, got %q", d.Stage)
+	}
+	if !strings.Contains(d.Reason, "test.always_fails") || !strings.Contains(d.Reason, "by_design") {
+		t.Fatalf("reason must include constraint name and code, got %q", d.Reason)
+	}
+	if d.DecidedAt.IsZero() {
+		t.Fatal("DecidedAt must be set on every Decision")
+	}
+}
+
+func TestSubmitFallsThroughWhenConstraintsPass(t *testing.T) {
+	t.Parallel()
+
+	r := NewConstraintRegistry()
+	r.Register(constraintFunc{
+		name: "test.always_passes",
+		eval: func(Proposal) error { return nil },
+	})
+
+	e := New(WithConstraints(r))
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
+	if d.Kind != DecisionReject {
+		t.Fatalf("expected reject (pipeline still incomplete), got %s", d.Kind)
+	}
+	if d.Stage != "fallback" {
+		t.Fatalf("a passing constraint must let the proposal reach fallback; got stage=%q", d.Stage)
+	}
+}
+
+func TestSubmitConstraintsRunAfterContextCheck(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	r := NewConstraintRegistry()
+	r.Register(constraintFunc{
+		name: "test.records_call",
+		eval: func(Proposal) error { called = true; return nil },
+	})
+
+	e := New(WithConstraints(r))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	d := e.Submit(ctx, Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
+	if d.Kind != DecisionDefer || d.Stage != "intake" {
+		t.Fatalf("cancelled context must defer at intake; got kind=%s stage=%q", d.Kind, d.Stage)
+	}
+	if called {
+		t.Fatal("constraints must not run when the context is already cancelled")
+	}
+}
+
+func TestNewIgnoresNilOption(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil)
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
+	if d.Kind != DecisionReject || d.Stage != "fallback" {
+		t.Fatalf("nil option must be a no-op; got kind=%s stage=%q", d.Kind, d.Stage)
+	}
+}
