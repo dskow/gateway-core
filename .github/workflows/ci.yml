@@ -31,6 +31,11 @@ jobs:
           # the module cache and emits "Cannot open: File exists" tar
           # warnings before falling back to a cold install.
           install-go: false
+          # The action's own cache step pins actions/cache@v4 (Node 20),
+          # which is what the runner deprecation annotation is flagging.
+          # Skip it; the Go cache from setup-go-cache above keeps
+          # `go install staticcheck` warm between runs anyway.
+          use-cache: false
 
   build:
     runs-on: ubuntu-latest
