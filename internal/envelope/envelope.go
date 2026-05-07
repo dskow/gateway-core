@@ -22,6 +22,7 @@ var ErrFallback = errors.New("envelope: autonomous-safe fallback; no agent pipel
 type Envelope struct {
 	now         func() time.Time
 	constraints *ConstraintRegistry
+	bounds      *BoundsRegistry
 }
 
 // Option configures an Envelope at construction time. Options are
@@ -37,6 +38,14 @@ type Option func(*Envelope)
 // disables the stage (equivalent to omitting the option).
 func WithConstraints(r *ConstraintRegistry) Option {
 	return func(e *Envelope) { e.constraints = r }
+}
+
+// WithBounds installs the bounded-deltas stage. Bounds run after
+// constraints; a violation short-circuits with stage "bounds" and the
+// violation's structured reason. A nil registry disables the stage
+// (equivalent to omitting the option).
+func WithBounds(r *BoundsRegistry) Option {
+	return func(e *Envelope) { e.bounds = r }
 }
 
 // New returns an Envelope configured with the given options. With no
@@ -65,10 +74,11 @@ func NewAutonomousSafe() *Envelope {
 //
 //  1. context cancellation  → DecisionDefer, stage "intake"
 //  2. constraints (if any)  → DecisionReject, stage "constraints"
-//  3. fallback              → DecisionReject, stage "fallback"
+//  3. bounds (if any)       → DecisionReject, stage "bounds"
+//  4. fallback              → DecisionReject, stage "fallback"
 //
-// Later stages (bounds, dampener, shadow) will slot in between
-// constraints and fallback as they are built.
+// Later stages (dampener, shadow) will slot in between bounds and
+// fallback as they are built.
 func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 	now := e.timeNow()
 	if err := ctx.Err(); err != nil {
@@ -84,6 +94,16 @@ func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 			return Decision{
 				Kind:      DecisionReject,
 				Stage:     "constraints",
+				Reason:    err.Error(),
+				DecidedAt: now,
+			}
+		}
+	}
+	if e != nil && e.bounds != nil {
+		if err := e.bounds.Evaluate(p); err != nil {
+			return Decision{
+				Kind:      DecisionReject,
+				Stage:     "bounds",
 				Reason:    err.Error(),
 				DecidedAt: now,
 			}

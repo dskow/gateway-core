@@ -14,6 +14,9 @@
 //     that runs before any later stage. A violation short-circuits with stage
 //     "constraints" and a structured reason; the rest of the pipeline (bounds,
 //     dampener, shadow) is not consulted.
+//   - The bounded-deltas stage: an operator-authored BoundsRegistry of
+//     per-Kind absolute value-range bounds. Runs after constraints; a
+//     violation short-circuits with stage "bounds" and a structured reason.
 //
 // The package's contract is therefore:
 //
@@ -27,6 +30,11 @@
 //     unconstitutional proposals at the constraints stage and otherwise
 //     also falls back. Constraints never weaken the autonomous-safe contract;
 //     they only produce clearer rejection reasons.
+//   - An Envelope built with WithBounds rejects out-of-range proposals at
+//     the bounds stage and otherwise also falls back. Bounds layer on top
+//     of constraints: constraints encode well-formedness rules owned by the
+//     gateway codebase, bounds encode environment-specific operating ranges
+//     authored by operators per deployment.
 //   - No exported function in this package may block on, depend on, or
 //     mutate the data path.
 package envelope

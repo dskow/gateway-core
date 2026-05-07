@@ -180,3 +180,81 @@ func TestNewIgnoresNilOption(t *testing.T) {
 		t.Fatalf("nil option must be a no-op; got kind=%s stage=%q", d.Kind, d.Stage)
 	}
 }
+
+func TestSubmitRunsBoundsAfterConstraints(t *testing.T) {
+	t.Parallel()
+
+	br := NewBoundsRegistry()
+	br.SetRateLimit(IntRange(10, 100))
+
+	e := New(WithConstraints(DefaultConstraints()), WithBounds(br))
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 500})
+	if d.Kind != DecisionReject {
+		t.Fatalf("expected reject, got %s", d.Kind)
+	}
+	if d.Stage != "bounds" {
+		t.Fatalf("expected stage=bounds, got %q", d.Stage)
+	}
+	if !strings.Contains(d.Reason, "above_maximum") {
+		t.Fatalf("reason must include the bounds violation code, got %q", d.Reason)
+	}
+}
+
+func TestSubmitConstraintFailureSkipsBounds(t *testing.T) {
+	t.Parallel()
+
+	br := NewBoundsRegistry()
+	br.SetRateLimit(IntRange(10, 100))
+
+	cr := NewConstraintRegistry()
+	cr.Register(constraintFunc{
+		name: "test.always_fails",
+		eval: func(Proposal) error {
+			return &ConstraintViolation{Constraint: "test.always_fails", Reason: "by_design"}
+		},
+	})
+
+	// Value 500 violates both constraints (synthetic) and bounds (above_maximum).
+	// The pipeline must short-circuit at constraints; the bounds rejection
+	// reason must not appear in the decision.
+	e := New(WithConstraints(cr), WithBounds(br))
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 500})
+	if d.Stage != "constraints" {
+		t.Fatalf("constraint failure must short-circuit before bounds; got stage=%q", d.Stage)
+	}
+	if strings.Contains(d.Reason, "above_maximum") {
+		t.Fatalf("constraint stage must not surface a bounds reason, got %q", d.Reason)
+	}
+}
+
+func TestSubmitFallsThroughWhenBoundsPass(t *testing.T) {
+	t.Parallel()
+
+	br := NewBoundsRegistry()
+	br.SetRateLimit(IntRange(10, 1000))
+
+	e := New(WithConstraints(DefaultConstraints()), WithBounds(br))
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 500})
+	if d.Kind != DecisionReject {
+		t.Fatalf("expected reject (pipeline still incomplete), got %s", d.Kind)
+	}
+	if d.Stage != "fallback" {
+		t.Fatalf("a passing bound must let the proposal reach fallback; got stage=%q", d.Stage)
+	}
+}
+
+func TestSubmitBoundsRunAfterContextCheck(t *testing.T) {
+	t.Parallel()
+
+	br := NewBoundsRegistry()
+	br.SetRateLimit(IntRange(10, 100))
+
+	e := New(WithBounds(br))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	d := e.Submit(ctx, Proposal{Kind: KindRateLimit, Agent: "x", Value: 500})
+	if d.Kind != DecisionDefer || d.Stage != "intake" {
+		t.Fatalf("cancelled context must defer at intake; got kind=%s stage=%q", d.Kind, d.Stage)
+	}
+}
