@@ -1,6 +1,7 @@
 package envelope
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -124,7 +125,8 @@ func (r *ConstraintRegistry) Evaluate(p Proposal) error {
 		if err == nil {
 			continue
 		}
-		if v, ok := err.(*ConstraintViolation); ok {
+		var v *ConstraintViolation
+		if errors.As(err, &v) {
 			return v
 		}
 		return &ConstraintViolation{
