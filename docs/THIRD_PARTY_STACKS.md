@@ -16,9 +16,10 @@ production-ready manifests.
 
 ## 1. Summary
 
-For the deterministic side of `gateway-core` — JWT / OIDC auth, rate
-limiting, reverse proxy with health checks, circuit breakers, hot
-reload, TLS termination, an admin API, structured errors,
+For the deterministic side of `gateway-core` — JSON Web Token (JWT)
+and OpenID Connect (OIDC) authentication, rate limiting, reverse
+proxy with health checks, circuit breakers, hot reload, Transport
+Layer Security (TLS) termination, an admin API, structured errors,
 observability — there are at least four mature container stacks that
 compose into the same capability set, often with a single image plus
 one or two adjuncts.
@@ -38,6 +39,13 @@ within a year — keep reading the rest of this document.
 ---
 
 ## 2. Feature mapping
+
+The matrix below uses several short forms. `IdP` is an identity
+provider, `mTLS` is mutual TLS, `Prom` is Prometheus, `OTel` is
+OpenTelemetry, and `xDS` is Envoy's family of dynamic-configuration
+discovery services (CDS / EDS / RDS / LDS / SDS / ADS, for cluster,
+endpoint, route, listener, secret, and aggregated discovery service
+respectively).
 
 | Capability                         | gateway-core                    | Envoy + adjuncts             | Apache APISIX                | Traefik              | Kong DB-less          |
 |------------------------------------|---------------------------------|------------------------------|------------------------------|----------------------|-----------------------|
@@ -64,9 +72,9 @@ within a year — keep reading the rest of this document.
 Bold rows are the differentiated feature set described in
 [`AGENTIC_ENVELOPE.md`](AGENTIC_ENVELOPE.md). The `partial` notes on
 the shadow row are the closest off-the-shelf equivalents — traffic
-mirroring or shadow routing — but none of them score against SLOs,
-gate config changes, or sit inside an ordered envelope of safety
-checks.
+mirroring or shadow routing — but none of them score against
+Service Level Objectives (SLOs), gate config changes, or sit inside
+an ordered envelope of safety checks.
 
 ---
 
@@ -414,7 +422,7 @@ shaped on top of an off-the-shelf gateway:
   containers; `gateway-core` is one).
 - You need a feature already shipping in an off-the-shelf gateway
   but not in `gateway-core` (e.g., GraphQL transformation, gRPC-Web
-  bridging, request transformation DSLs).
+  bridging, request transformation domain-specific languages (DSLs)).
 
 ### 5.2 Pick `gateway-core` when
 
