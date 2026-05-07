@@ -538,21 +538,23 @@ the best of both: the off-the-shelf gateway's plugin catalogue, and
 the Envelope's structured gating of agent-driven changes.
 
 ```mermaid
-flowchart LR
-    Client([Client traffic])
+flowchart TB
     Signal([Signal source<br/>metrics / anomaly / schedule])
 
     subgraph sidecar["gateway-core sidecar (Envelope host)"]
+        direction TB
         Pipeline["Pipeline<br/>Planner → Verifier → Safety → Observer"]
         Envelope["Envelope<br/>Constraints → Bounds → Dampener → Shadow"]
         Writer["Config writer"]
     end
 
     subgraph dataplane["Off-the-shelf data plane"]
-        Gateway["Envoy / APISIX / Kong / Traefik"]
+        direction LR
         ConfigStore[("etcd / xDS / Admin API")]
+        Gateway["Envoy / APISIX / Kong / Traefik"]
     end
 
+    Client([Client traffic])
     Backend["Upstream services"]
 
     Signal -->|trigger| Pipeline
