@@ -32,7 +32,7 @@ func TestConstraintRegistry_NilRegistryIsSafe(t *testing.T) {
 func TestConstraintRegistry_ShortCircuitsOnFirstViolation(t *testing.T) {
 	t.Parallel()
 
-	calls := []string{}
+	var calls []string
 	a := constraintFunc{name: "a", eval: func(Proposal) error {
 		calls = append(calls, "a")
 		return &ConstraintViolation{Constraint: "a", Reason: "always_fails"}
