@@ -30,6 +30,11 @@ jobs:
       - uses: dominikh/staticcheck-action@v1
         with:
           version: latest
+          # Reuse the Go installed by setup-go above. Otherwise the action
+          # invokes its own setup-go (with `version: stable`), which races
+          # the module cache and emits "Cannot open: File exists" tar
+          # warnings before falling back to a cold install.
+          install-go: false
 
   build:
     runs-on: ubuntu-latest
