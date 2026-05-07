@@ -218,7 +218,7 @@ type PipelineOutcome struct {
 	// DisabledUntil is meaningful only on OutcomeDisabled produced by
 	// an exhausted error budget; it is the wall-clock time the
 	// pipeline expects to allow Run to proceed again. Zero if the
-	// disable is operator-driven (no automatic recovery).
+	// disable property is operator-driven (no automatic recovery).
 	DisabledUntil time.Time
 
 	// DecidedAt is the time the pipeline produced this outcome.
@@ -234,7 +234,7 @@ type PipelineOutcome struct {
 // per-agent counts, exponential backoff) is a future extension.
 type ErrorBudget struct {
 	// MaxConsecutiveErrors is the number of consecutive OutcomeError
-	// runs that triggers a disable. Zero or negative disables the
+	// runs that triggers a disable property. Zero or negative disables the
 	// budget.
 	MaxConsecutiveErrors int
 
@@ -295,7 +295,7 @@ var errAgentMisorder = errors.New("envelope: pipeline reviewers must be in non-d
 
 // NewPipeline constructs a pipeline with the given Planner and
 // Reviewers. Reviewers must be supplied in non-decreasing Role order
-// (Verifier before Safety before Observer); duplicate roles are
+// (Verifier is before Safety which is before Observer); duplicate roles are
 // allowed because an operator may want, e.g., two safety reviewers
 // composing different checks.
 //

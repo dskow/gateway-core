@@ -397,7 +397,7 @@ func TestPipelineErrorBudgetDisablesAfterStreak(t *testing.T) {
 		t.Fatal("pipeline must be disabled after exhausting the budget")
 	}
 
-	// Third call inside cooldown — must short-circuit to disabled.
+	// Third call inside cooldown — must short-circuit to disabled property.
 	out = pl.Run(context.Background())
 	if out.Kind != OutcomeDisabled {
 		t.Fatalf("inside cooldown: expected OutcomeDisabled, got %s", out.Kind)
