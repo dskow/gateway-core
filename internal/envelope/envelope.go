@@ -23,6 +23,7 @@ type Envelope struct {
 	now         func() time.Time
 	constraints *ConstraintRegistry
 	bounds      *BoundsRegistry
+	dampener    *DampenerRegistry
 }
 
 // Option configures an Envelope at construction time. Options are
@@ -46,6 +47,16 @@ func WithConstraints(r *ConstraintRegistry) Option {
 // (equivalent to omitting the option).
 func WithBounds(r *BoundsRegistry) Option {
 	return func(e *Envelope) { e.bounds = r }
+}
+
+// WithDampener installs the dampener stage. The dampener runs after
+// bounds; a "cooldown_active" outcome short-circuits with stage
+// "dampener" and DecisionDefer (with RetryAfter set), while a
+// "below_hysteresis" outcome short-circuits with stage "dampener" and
+// DecisionReject. A nil registry disables the stage (equivalent to
+// omitting the option).
+func WithDampener(r *DampenerRegistry) Option {
+	return func(e *Envelope) { e.dampener = r }
 }
 
 // New returns an Envelope configured with the given options. With no
@@ -75,10 +86,12 @@ func NewAutonomousSafe() *Envelope {
 //  1. context cancellation  → DecisionDefer, stage "intake"
 //  2. constraints (if any)  → DecisionReject, stage "constraints"
 //  3. bounds (if any)       → DecisionReject, stage "bounds"
-//  4. fallback              → DecisionReject, stage "fallback"
+//  4. dampener (if any)     → DecisionDefer (cooldown) or
+//                              DecisionReject (hysteresis), stage "dampener"
+//  5. fallback              → DecisionReject, stage "fallback"
 //
-// Later stages (dampener, shadow) will slot in between bounds and
-// fallback as they are built.
+// Later stages (shadow) will slot in between dampener and fallback as
+// they are built.
 func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 	now := e.timeNow()
 	if err := ctx.Err(); err != nil {
@@ -106,6 +119,21 @@ func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 				Stage:     "bounds",
 				Reason:    err.Error(),
 				DecidedAt: now,
+			}
+		}
+	}
+	if e != nil && e.dampener != nil {
+		if outcome := e.dampener.Evaluate(p, now); outcome != nil {
+			kind := DecisionReject
+			if outcome.Reason == "cooldown_active" {
+				kind = DecisionDefer
+			}
+			return Decision{
+				Kind:       kind,
+				Stage:      "dampener",
+				Reason:     outcome.Error(),
+				RetryAfter: outcome.RetryAfter,
+				DecidedAt:  now,
 			}
 		}
 	}
