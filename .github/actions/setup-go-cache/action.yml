@@ -1,0 +1,29 @@
+# Equivalent to `actions/setup-go@v6` with `cache: true`, but avoids the bundled
+# actions/cache@v4 (still on Node 20). Uses actions/cache@v5 (Node 24) instead.
+# Drop this once setup-go bumps its internal cache pin.
+name: Setup Go with cache@v5
+description: Install Go and restore the module/build cache via actions/cache@v5
+
+inputs:
+  go-version:
+    description: Go version selector passed to actions/setup-go
+    required: false
+    default: '1.25.x'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+        cache: false
+
+    - uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ inputs.go-version }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ inputs.go-version }}-
