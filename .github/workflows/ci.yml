@@ -21,11 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.x'
-          check-latest: true
-          cache: true
+      - uses: ./.github/actions/setup-go-cache
       - run: go vet ./...
       - uses: dominikh/staticcheck-action@v1
         with:
@@ -41,11 +37,7 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.x'
-          check-latest: true
-          cache: true
+      - uses: ./.github/actions/setup-go-cache
       - run: go build -o bin/gateway ./cmd/gateway
       - run: go build -o bin/echoserver ./cmd/echoserver
 
@@ -54,11 +46,7 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.x'
-          check-latest: true
-          cache: true
+      - uses: ./.github/actions/setup-go-cache
       - run: go test ./... -v -cover -race -coverprofile=coverage.out
       - uses: actions/upload-artifact@v7
         with:
@@ -76,11 +64,7 @@ jobs:
           - { pkg: './internal/auth', func: 'FuzzAuthMiddleware' }
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.x'
-          check-latest: true
-          cache: true
+      - uses: ./.github/actions/setup-go-cache
       - name: Fuzz ${{ matrix.target.func }}
         run: go test ${{ matrix.target.pkg }} -fuzz=${{ matrix.target.func }} -fuzztime=30s
 
@@ -89,11 +73,7 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.x'
-          check-latest: true
-          cache: true
+      - uses: ./.github/actions/setup-go-cache
 
       - name: Start services
         run: |
