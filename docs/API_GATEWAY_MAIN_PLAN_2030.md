@@ -238,14 +238,14 @@ Security is **never delegated** to agents.
 ---
 
 # 🧭 **14. The Wow‑Factor Roadmap (12–18 Months)**
-| Quarter | Theme | High‑Impact Deliverables |
-|--------|--------|---------------------------|
-| **Q1** | Foundation | AI‑agnostic core, routing, TLS, declarative config |
-| **Q2** | Observability | OTel, dashboards, structured logs |
-| **Q3** | Extensibility | WASM runtime, plugin SDKs, marketplace |
-| **Q4** | Agentic Layer | agentic sidecar, envelope, shadow mode |
-| **Q5** | Enterprise | hybrid control plane, distributed limits |
-| **Q6** | Cloud | managed SaaS gateway, multi‑region |
+| Quarter | Theme         | High‑Impact Deliverables                           |
+|---------|---------------|----------------------------------------------------|
+| **Q1**  | Foundation    | AI‑agnostic core, routing, TLS, declarative config |
+| **Q2**  | Observability | OTel, dashboards, structured logs                  |
+| **Q3**  | Extensibility | WASM runtime, plugin SDKs, marketplace             |
+| **Q4**  | Agentic Layer | agentic sidecar, envelope, shadow mode             |
+| **Q5**  | Enterprise    | hybrid control plane, distributed limits           |
+| **Q6**  | Cloud         | managed SaaS gateway, multi‑region                 |
 
 ---
 

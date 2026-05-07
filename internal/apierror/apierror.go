@@ -5,6 +5,7 @@ package apierror
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -75,17 +76,21 @@ func WriteJSON(w http.ResponseWriter, r *http.Request, status int, code ErrorCod
 
 	if requestID == "" {
 		if body := preSerialized(status, code, message); body != nil {
-			w.Write(body) //nolint:errcheck
+			if _, err := w.Write(body); err != nil {
+				slog.Debug("apierror: failed to write pre-serialized body", "code", code, "error", err)
+			}
 			return
 		}
 	}
 
-	json.NewEncoder(w).Encode(ErrorResponse{
+	if err := json.NewEncoder(w).Encode(ErrorResponse{
 		Error:     http.StatusText(status),
 		ErrorCode: string(code),
 		Message:   message,
 		RequestID: requestID,
-	})
+	}); err != nil {
+		slog.Debug("apierror: failed to encode error response", "code", code, "error", err)
+	}
 }
 
 // preSerialized returns a pre-built response body for common error

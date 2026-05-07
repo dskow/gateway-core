@@ -8,31 +8,31 @@ This document pairs with [ARCHITECTURE.md](ARCHITECTURE.md). Where that doc desc
 
 ## **1. Pattern Landscape at a Glance**
 
-| Category | Pattern | Status | Location |
-|---|---|---|---|
-| Creational | Abstract Factory | Absent (correct) | — |
-| Creational | Builder | Absent (correct) | — |
-| Creational | Factory Method | Absent (correct) | — |
-| Creational | Prototype | Absent (correct) | — |
-| Creational | **Singleton** | ⚠ Anti-pattern | `internal/metrics/metrics.go` |
-| Structural | Adapter | ✓ Idiomatic (embedding) | `internal/middleware/logging.go`, `internal/proxy/proxy.go` |
-| Structural | Bridge | Absent (correct) | — |
-| Structural | Composite | ✓ Correct (minor flaw) | `internal/circuitbreaker/composite.go` |
-| Structural | **Decorator** | ✓ Textbook | middleware stack + breaker stack |
-| Structural | Facade | ✓ Correct | `internal/health/health.go` |
-| Structural | Flyweight | ✓ Correct | `sync.Pool` in logging and proxy |
-| Structural | Proxy | ✓ Correct (minor flaw) | `internal/proxy/proxy.go` |
-| Behavioral | **Chain of Responsibility** | ✓ Idiomatic | middleware stack in `cmd/gateway/main.go` |
-| Behavioral | Command | Absent (correct) | — |
-| Behavioral | Interpreter | Absent (correct) | — |
-| Behavioral | Iterator | ✓ Snapshot-style | `internal/ratelimit/ratelimit.go` |
-| Behavioral | **Mediator** | ⚠ Manual wiring in `main()` | `cmd/gateway/main.go` |
-| Behavioral | Memento | Absent (acceptable) | — |
-| Behavioral | **Observer** | ⚠ Half-implemented | `internal/config/reload.go` |
-| Behavioral | State | ✓ Simple FSM (not GoF) | `internal/circuitbreaker/failure_rate.go` |
-| Behavioral | Strategy | ⚠ Pseudo (single-impl) | `internal/circuitbreaker/adaptive.go` |
-| Behavioral | Template Method | ⚠ DRY violation | `internal/config/config.go` |
-| Behavioral | Visitor | Absent (correct) | — |
+| Category   | Pattern                     | Status                      | Location                                                    |
+|------------|-----------------------------|-----------------------------|-------------------------------------------------------------|
+| Creational | Abstract Factory            | Absent (correct)            | —                                                           |
+| Creational | Builder                     | Absent (correct)            | —                                                           |
+| Creational | Factory Method              | Absent (correct)            | —                                                           |
+| Creational | Prototype                   | Absent (correct)            | —                                                           |
+| Creational | **Singleton**               | ⚠ Anti-pattern              | `internal/metrics/metrics.go`                               |
+| Structural | Adapter                     | ✓ Idiomatic (embedding)     | `internal/middleware/logging.go`, `internal/proxy/proxy.go` |
+| Structural | Bridge                      | Absent (correct)            | —                                                           |
+| Structural | Composite                   | ✓ Correct (minor flaw)      | `internal/circuitbreaker/composite.go`                      |
+| Structural | **Decorator**               | ✓ Textbook                  | middleware stack + breaker stack                            |
+| Structural | Facade                      | ✓ Correct                   | `internal/health/health.go`                                 |
+| Structural | Flyweight                   | ✓ Correct                   | `sync.Pool` in logging and proxy                            |
+| Structural | Proxy                       | ✓ Correct (minor flaw)      | `internal/proxy/proxy.go`                                   |
+| Behavioral | **Chain of Responsibility** | ✓ Idiomatic                 | middleware stack in `cmd/gateway/main.go`                   |
+| Behavioral | Command                     | Absent (correct)            | —                                                           |
+| Behavioral | Interpreter                 | Absent (correct)            | —                                                           |
+| Behavioral | Iterator                    | ✓ Snapshot-style            | `internal/ratelimit/ratelimit.go`                           |
+| Behavioral | **Mediator**                | ⚠ Manual wiring in `main()` | `cmd/gateway/main.go`                                       |
+| Behavioral | Memento                     | Absent (acceptable)         | —                                                           |
+| Behavioral | **Observer**                | ⚠ Half-implemented          | `internal/config/reload.go`                                 |
+| Behavioral | State                       | ✓ Simple FSM (not GoF)      | `internal/circuitbreaker/failure_rate.go`                   |
+| Behavioral | Strategy                    | ⚠ Pseudo (single-impl)      | `internal/circuitbreaker/adaptive.go`                       |
+| Behavioral | Template Method             | ⚠ DRY violation             | `internal/config/config.go`                                 |
+| Behavioral | Visitor                     | Absent (correct)            | —                                                           |
 
 **Three flaws dominate**: the Observer on config reload has no error/rollback semantics; `main()` is a 300-line de facto mediator; metrics are exposed as Singleton globals. Everything else is either healthy or correctly absent.
 
@@ -133,14 +133,14 @@ What's missing is *rollback semantics*. Callbacks return nothing, so:
 The refactor is small and obvious:
 
 ```go
-type ConfigObserver interface {
+type Observer interface {
     OnReload(old, new *config.Config) error
 }
 ```
 
 …with rollback-on-first-error inside `Reloader.Reload()`.
 
-### **Metrics plane — Singleton (anti-pattern, contained)**
+### **Metrics plane — Singleton (antipattern, contained)**
 
 [`metrics.go:13`](../internal/metrics/metrics.go) exposes Prometheus collectors as package-level vars plus an `Init()` that must be called exactly once. Classic Java-ported Singleton via globals.
 
@@ -176,7 +176,7 @@ When the Proxy picks a route, it consults a `CompositeBreaker` — but the Compo
 
 These two are coupled in a way that amplifies both weaknesses. `main()` registers reload callbacks by hand, each closing over a specific component. The callback list is implicit in the order of `main()`, and because callbacks can't return errors, `main()` has no way to sequence or validate reloads either.
 
-Fix them together: a `Gateway` struct that owns the components *and* registers them as `ConfigObserver` implementations. This collapses two anti-patterns into one coherent design.
+Fix them together: a `Gateway` struct that owns the components *and* registers them as `config.Observer` implementations. This collapses two antipatterns into one coherent design.
 
 ### **4.4  Flyweight × Proxy (retry-safe, GC-friendly)**
 
@@ -190,7 +190,7 @@ The retry loop in the Proxy buffers intermediate responses so a non-final attemp
 
 ### **4.6  Pseudo-Strategy in `AdaptiveBreaker`**
 
-`AdaptiveBreaker` is sometimes described as a Strategy for threshold tuning, but there's only one algorithm (EWMA). In practice it is a Decorator that *contains* an algorithm. That's fine — Strategy only pays off when you have ≥2 interchangeable implementations and a runtime-selectable policy. Labeling it "Strategy" today would be aspirational at best and misleading at worst.
+`AdaptiveBreaker` is sometimes described as a Strategy for threshold tuning, but there's only one algorithm (EWMA). In practice, it is a Decorator that *contains* an algorithm. That's fine — Strategy only pays off when you have ≥2 interchangeable implementations and a runtime-selectable policy. Labeling it "Strategy" today would be aspirational at best and misleading at worst.
 
 **When Strategy would become real here**: the day a second adaptation algorithm (e.g. percentile-based, RL-tuned) is introduced, extract the threshold-update step behind an interface. Not before.
 
@@ -215,18 +215,18 @@ Resist adding any of these on aesthetic grounds. Each one costs indirection; eac
 
 Ranked by ROI (risk reduction per hour of effort):
 
-| # | Flaw | Risk | Effort | Fix |
-|---|---|---|---|---|
-| 1 | **Observer has no error/rollback** ([reload.go:19](../internal/config/reload.go)) | High — split-brain on bad reload | Small | Change callback signature to `error`; rollback on first failure. |
-| 2 | **Metrics as Singleton globals** ([metrics.go:13](../internal/metrics/metrics.go)) | Medium — tests, double-init panic | Small-medium | Wrap in `*Metrics` struct, inject into handlers. |
-| 3 | **`main()` is a monolithic wirer** ([main.go](../cmd/gateway/main.go)) | Medium — grows superlinearly | Medium | Extract a `Gateway` struct; wiring becomes a method graph. Apply **Dependency Injection** (Fowler 2004) — see §8. |
-| 4 | **Distributed Tracing absent** (middleware and proxy) | Medium — no span propagation across hops | Medium | Adopt OpenTelemetry; propagate W3C `traceparent` through the middleware chain and into the Proxy's outbound request. The biggest cloud-native gap — see §8. |
-| 5 | **`ratelimit.Limiter` map never evicts** ([ratelimit.go](../internal/ratelimit/ratelimit.go)) | Medium — unbounded memory per unique client | Small | Apply Nygard's **Steady State** pattern: periodic janitor goroutine that evicts entries past `lastSeen` + TTL. See §8. |
-| 6 | **`CompositeBreaker.State()` hides Bulkhead** ([composite.go:85](../internal/circuitbreaker/composite.go)) | Low — misleading telemetry | Tiny | Expose `InnerState()` and `EffectiveState()`. |
-| 7 | **`Load` / `LoadFromBytes` duplicate pipeline** ([config.go:180](../internal/config/config.go)) | Low — DRY | Tiny | Private `load(data string)` helper. |
-| 8 | **Proxy map keyed by `PathPrefix`** ([proxy.go:71](../internal/proxy/proxy.go)) | Low today, latent | Small | Key by backend URL; dedupe `httputil.ReverseProxy` instances. |
+| # | Flaw                                                                                                       | Risk                                        | Effort       | Fix                                                                                                                                                         |
+|---|------------------------------------------------------------------------------------------------------------|---------------------------------------------|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | **Observer has no error/rollback** ([reload.go:19](../internal/config/reload.go))                          | High — split-brain on bad reload            | Small        | Change callback signature to `error`; rollback on first failure.                                                                                            |
+| 2 | **Metrics as Singleton globals** ([metrics.go:13](../internal/metrics/metrics.go))                         | Medium — tests, double-init panic           | Small-medium | Wrap in `*Metrics` struct, inject into handlers.                                                                                                            |
+| 3 | **`main()` is a monolithic wirer** ([main.go](../cmd/gateway/main.go))                                     | Medium — grows superlinearly                | Medium       | Extract a `Gateway` struct; wiring becomes a method graph. Apply **Dependency Injection** (Fowler 2004) — see §8.                                           |
+| 4 | **Distributed Tracing absent** (middleware and proxy)                                                      | Medium — no span propagation across hops    | Medium       | Adopt OpenTelemetry; propagate W3C `traceparent` through the middleware chain and into the Proxy's outbound request. The biggest cloud-native gap — see §8. |
+| 5 | **`ratelimit.Limiter` map never evicts** ([ratelimit.go](../internal/ratelimit/ratelimit.go))              | Medium — unbounded memory per unique client | Small        | Apply Nygard's **Steady State** pattern: periodic janitor goroutine that evicts entries past `lastSeen` + TTL. See §8.                                      |
+| 6 | **`CompositeBreaker.State()` hides Bulkhead** ([composite.go:85](../internal/circuitbreaker/composite.go)) | Low — misleading telemetry                  | Tiny         | Expose `InnerState()` and `EffectiveState()`.                                                                                                               |
+| 7 | **`Load` / `LoadFromBytes` duplicate pipeline** ([config.go:180](../internal/config/config.go))            | Low — DRY                                   | Tiny         | Private `load(data string)` helper.                                                                                                                         |
+| 8 | **Proxy map keyed by `PathPrefix`** ([proxy.go:71](../internal/proxy/proxy.go))                            | Low today, latent                           | Small        | Key by backend URL; dedupe `httputil.ReverseProxy` instances.                                                                                               |
 
-Items 1 and 3 should be fixed together — they share the underlying refactor (a `Gateway` struct that owns components *and* implements `ConfigObserver`). Items 4 and 5 are not GoF flaws at all; they emerge only under the post-GoF lens in §8, which is precisely why that lens matters.
+Items 1 and 3 should be fixed together — they share the underlying refactor (a `Gateway` struct that owns components *and* implements `config.Observer`). Items 4 and 5 are not GoF flaws at all; they emerge only under the post-GoF lens in §8, which is precisely why that lens matters.
 
 ---
 
@@ -236,7 +236,7 @@ When a new gateway capability lands, pattern choice is rarely ambiguous if you f
 
 - **Cross-cutting request concern** → new middleware (Decorator/Chain of Responsibility; or, in EIP vocabulary, a new filter in the Pipes-and-Filters chain — see §8).
 - **New upstream-protection dimension** → new breaker Decorator inside `NewComposite()`. Name it in Nygard vocabulary (Bulkhead, Timeout, Fail Fast) rather than generic "Decorator."
-- **New config surface** → extend the `Config` struct; implement `ConfigObserver` (after refactor #1).
+- **New config surface** → extend the `Config` struct; implement `config.Observer` (after refactor #1).
 - **New metric** → after refactor #2, add a field to `*Metrics` and inject; before refactor #2, add a global and update the `Init()` call *once*.
 - **New upstream transport (gRPC, WebSocket)** → new Proxy; do not conflate with HTTP router.
 - **New adaptive algorithm** → promote `AdaptiveBreaker`'s threshold-update step to a real Strategy interface.
@@ -264,17 +264,17 @@ Plus two cross-cutting sources:
 
 The GoF view hides this: most of what `gateway-core` *does* is post-GoF patterns. Naming them correctly makes both the code and the docs clearer.
 
-| Pattern | Origin | Where it lives | GoF misattribution we'd been making |
-|---|---|---|---|
-| **Circuit Breaker** | Nygard 2007 | [`failure_rate.go`](../internal/circuitbreaker/failure_rate.go) | "State machine / Decorator" |
-| **Bulkhead** | Nygard 2007 | [`bulkhead.go`](../internal/circuitbreaker/bulkhead.go) | "Decorator with a semaphore" |
-| **Timeout** | Nygard 2007 | [`timeout.go`](../internal/circuitbreaker/timeout.go) | "Decorator" |
-| **Fail Fast / Shed Load** | Nygard 2007 | [`ratelimit.go`](../internal/ratelimit/ratelimit.go) and auth-rejection middleware | "Chain of Responsibility short-circuit" |
-| **API Gateway** | Richardson 2018 | the project itself | — (we had no GoF name for what this project *is*) |
-| **Health Check API** | Richardson 2018 | [`internal/health`](../internal/health) | "Facade" |
-| **Externalized Configuration** | 12-Factor / Richardson | [`internal/config`](../internal/config) | — |
-| **Pipes and Filters** | EIP 2003 | middleware stack | "Chain of Responsibility" (also true, but EIP fits better) |
-| **Content-Based Router** | EIP 2003 | [`proxy.Router.matchRoute`](../internal/proxy/proxy.go) | "Proxy dispatch" |
+| Pattern                        | Origin                 | Where it lives                                                                     | GoF misattribution we'd been making                        |
+|--------------------------------|------------------------|------------------------------------------------------------------------------------|------------------------------------------------------------|
+| **Circuit Breaker**            | Nygard 2007            | [`failure_rate.go`](../internal/circuitbreaker/failure_rate.go)                    | "State machine / Decorator"                                |
+| **Bulkhead**                   | Nygard 2007            | [`bulkhead.go`](../internal/circuitbreaker/bulkhead.go)                            | "Decorator with a semaphore"                               |
+| **Timeout**                    | Nygard 2007            | [`timeout.go`](../internal/circuitbreaker/timeout.go)                              | "Decorator"                                                |
+| **Fail Fast / Shed Load**      | Nygard 2007            | [`ratelimit.go`](../internal/ratelimit/ratelimit.go) and auth-rejection middleware | "Chain of Responsibility short-circuit"                    |
+| **API Gateway**                | Richardson 2018        | the project itself                                                                 | — (we had no GoF name for what this project *is*)          |
+| **Health Check API**           | Richardson 2018        | [`internal/health`](../internal/health)                                            | "Facade"                                                   |
+| **Externalized Configuration** | 12-Factor / Richardson | [`internal/config`](../internal/config)                                            | —                                                          |
+| **Pipes and Filters**          | EIP 2003               | middleware stack                                                                   | "Chain of Responsibility" (also true, but EIP fits better) |
+| **Content-Based Router**       | EIP 2003               | [`proxy.Router.matchRoute`](../internal/proxy/proxy.go)                            | "Proxy dispatch"                                           |
 
 **The most important renaming**: the middleware stack is more precisely *Pipes and Filters* than *Chain of Responsibility*. CoR implies each link decides *whether* to handle; Pipes and Filters implies every filter transforms the stream and passes it on. The gateway's middleware is overwhelmingly the latter — only auth and rate limit ever short-circuit. Using EIP vocabulary prevents new contributors from writing "clever" CoR-style conditional middleware that breaks request/response symmetry.
 

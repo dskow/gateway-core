@@ -26,7 +26,7 @@ type Handler struct {
 	breakers map[string]*circuitbreaker.CompositeBreaker
 	logger   *slog.Logger
 
-	// Cached readiness result to avoid TCP-dialling every backend on
+	// Cached readiness result to avoid TCP-dialing every backend on
 	// every /ready poll. Protected by cacheMu.
 	cacheMu      sync.RWMutex
 	cachedResult []byte
@@ -35,7 +35,7 @@ type Handler struct {
 }
 
 // New creates a new health check Handler. breakers maps backend URLs to
-// their circuit breaker instances (may be nil for backends without breakers).
+// their circuit breaker instances (it may be nil for backends without breakers).
 func New(routes []config.RouteConfig, breakers map[string]*circuitbreaker.CompositeBreaker, logger *slog.Logger) *Handler {
 	return &Handler{routes: routes, breakers: breakers, logger: logger}
 }
@@ -46,10 +46,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ready", h.readiness)
 }
 
-func (h *Handler) liveness(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) liveness(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(livenessBody)
+	if _, err := w.Write(livenessBody); err != nil {
+		h.logger.Debug("health: failed to write liveness response", "error", err)
+	}
 }
 
 func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +63,9 @@ func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
 		h.cacheMu.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		w.Write(body)
+		if _, err := w.Write(body); err != nil {
+			h.logger.Debug("health: failed to write cached readiness response", "error", err)
+		}
 		return
 	}
 	h.cacheMu.RUnlock()
@@ -89,8 +93,9 @@ func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
 				case circuitbreaker.StateHalfOpen:
 					ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "circuit-half-open", ok: true}
 					return
+				default:
+					// StateClosed — fall through to TCP dial for definitive check.
 				}
-				// StateClosed — fall through to TCP dial for definitive check.
 			}
 
 			u, err := url.Parse(route.Backend)
@@ -118,7 +123,9 @@ func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
 				ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "unreachable", ok: false}
 				return
 			}
-			conn.Close()
+			if cerr := conn.Close(); cerr != nil {
+				h.logger.Debug("health: failed to close probe connection", "backend", route.Backend, "error", cerr)
+			}
 			ch <- backendResult{prefix: route.PathPrefix, backend: route.Backend, status: "ok", ok: true}
 		}(route)
 	}
@@ -159,7 +166,9 @@ func (h *Handler) readiness(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
-	w.Write(body)
+	if _, err := w.Write(body); err != nil {
+		h.logger.Debug("health: failed to write readiness response", "error", err)
+	}
 }
 
 func hasPort(host string) bool {

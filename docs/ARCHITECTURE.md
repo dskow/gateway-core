@@ -958,7 +958,7 @@ flowchart TB
 Shadow Mode receives:
 
 - the **proposed change**  
-- a **traffic snapshot** (recent real traffic)  
+- **traffic snapshot** (recent real traffic)  
 - **current metrics & SLO targets**  
 
 These form the simulation context.
@@ -2704,23 +2704,21 @@ This is exactly what a modern AI‑native, zero‑trust gateway should look like
 
 Below is the full matrix.
 
-```markdown
-| Component            | Spoofing                          | Tampering                               | Repudiation                             | Information Disclosure                   | Denial of Service                        | Elevation of Privilege                   |
-|----------------------|-----------------------------------|-------------------------------------------|-------------------------------------------|-------------------------------------------|-------------------------------------------|-------------------------------------------|
-| **Gateway Core**     | Client identity spoofing          | Header/body manipulation                  | Request denial or false claims            | Sensitive data leakage                    | Traffic floods, resource exhaustion       | Attempt to bypass auth or limits         |
-| **Middleware Stack** | Forged tokens or sessions         | Altered headers or routing                | Missing audit logs                        | Leaking internal metadata                 | Overload via expensive middleware paths   | Abuse of misconfigured middleware         |
-| **Proxy Router**     | Fake service identity             | Route manipulation                        | Unlogged routing changes                  | Backend topology exposure                 | Routing storms, overload                  | Unauthorized route access                 |
-| **Agentic Envelope** | Fake agent identity               | Proposal tampering                        | Disputed decisions                        | Proposal content leakage                  | Proposal flood, consensus overload        | Bypassing constraints or boundaries       |
-| **Fallback Mode**    | Fake failure signals              | Forced freeze or unfreeze                 | Disputed fallback activation              | Config state exposure                     | Forced fallback loops                     | Forcing privileged recovery paths         |
-| **Planner Agent**    | Spoofed telemetry                 | Malicious proposal generation             | Untracked proposal emissions              | Telemetry leakage                         | Proposal spam                             | Generating privileged diffs               |
-| **Verifier Agent**   | Fake proposal source              | Altered validation results                | Unlogged rejections                       | Proposal content exposure                 | Validation overload                       | Approving privileged changes              |
-| **Safety Agent**     | Fake verified proposal            | Tampering with constraint checks          | Missing safety logs                       | Constraint details exposure               | Safety engine overload                    | Approving unsafe privileged actions       |
-| **Observer Agent**   | Fake candidate proposal           | Tampering with anomaly detection          | Missing anomaly logs                      | Traffic pattern leakage                   | Analysis overload                         | Approving unsafe final proposals          |
-| **Proposal Bus**     | Message spoofing                  | Message tampering                         | Missing message lineage                   | Proposal metadata leakage                 | Queue flooding, routing overload          | Injecting privileged messages             |
-| **Shadow Mode**      | Fake simulation inputs            | Tampering with replay or scoring          | Missing simulation logs                   | Snapshot leakage                          | Simulation overload                       | Manipulating simulation to approve risks  |
-| **Telemetry Export** | Fake telemetry source             | Altered metrics                           | Missing telemetry logs                    | Sensitive metrics leakage                 | Telemetry flood                           | Forging metrics to influence agents       |
-| **Backend Services** | Spoofed backend identity          | Response tampering                        | Missing backend logs                      | Data leakage                              | Backend overload                          | Unauthorized backend access               |
-```
+| Component            | Spoofing                  | Tampering                        | Repudiation                    | Information Disclosure      | Denial of Service                       | Elevation of Privilege                   |
+|----------------------|---------------------------|----------------------------------|--------------------------------|-----------------------------|-----------------------------------------|------------------------------------------|
+| **Gateway Core**     | Client identity spoofing  | Header/body manipulation         | Request denial or false claims | Sensitive data leakage      | Traffic floods, resource exhaustion     | Attempt to bypass auth or limits         |
+| **Middleware Stack** | Forged tokens or sessions | Altered headers or routing       | Missing audit logs             | Leaking internal metadata   | Overload via expensive middleware paths | Abuse of misconfigured middleware        |
+| **Proxy Router**     | Fake service identity     | Route manipulation               | Unlogged routing changes       | Backend topology exposure   | Routing storms, overload                | Unauthorized route access                |
+| **Agentic Envelope** | Fake agent identity       | Proposal tampering               | Disputed decisions             | Proposal content leakage    | Proposal flood, consensus overload      | Bypassing constraints or boundaries      |
+| **Fallback Mode**    | Fake failure signals      | Forced freeze or unfreeze        | Disputed fallback activation   | Config state exposure       | Forced fallback loops                   | Forcing privileged recovery paths        |
+| **Planner Agent**    | Spoofed telemetry         | Malicious proposal generation    | Untracked proposal emissions   | Telemetry leakage           | Proposal spam                           | Generating privileged diffs              |
+| **Verifier Agent**   | Fake proposal source      | Altered validation results       | Unlogged rejections            | Proposal content exposure   | Validation overload                     | Approving privileged changes             |
+| **Safety Agent**     | Fake verified proposal    | Tampering with constraint checks | Missing safety logs            | Constraint details exposure | Safety engine overload                  | Approving unsafe privileged actions      |
+| **Observer Agent**   | Fake candidate proposal   | Tampering with anomaly detection | Missing anomaly logs           | Traffic pattern leakage     | Analysis overload                       | Approving unsafe final proposals         |
+| **Proposal Bus**     | Message spoofing          | Message tampering                | Missing message lineage        | Proposal metadata leakage   | Queue flooding, routing overload        | Injecting privileged messages            |
+| **Shadow Mode**      | Fake simulation inputs    | Tampering with replay or scoring | Missing simulation logs        | Snapshot leakage            | Simulation overload                     | Manipulating simulation to approve risks |
+| **Telemetry Export** | Fake telemetry source     | Altered metrics                  | Missing telemetry logs         | Sensitive metrics leakage   | Telemetry flood                         | Forging metrics to influence agents      |
+| **Backend Services** | Spoofed backend identity  | Response tampering               | Missing backend logs           | Data leakage                | Backend overload                        | Unauthorized backend access              |
 
 ---
 
@@ -2761,52 +2759,50 @@ Everything fits together.
 
 # **STRIDE Mitigation Table — Controls × Threat Classes**
 
-```markdown
-| STRIDE Threat Class | Mitigation Controls                                                                 |
-|---------------------|--------------------------------------------------------------------------------------|
-| **S — Spoofing**    | - mTLS between all internal components                                               |
-|                     | - Strict identity boundaries for agents                                              |
-|                     | - Signed proposals with lineage metadata                                             |
-|                     | - Envelope identity verification                                                     |
-|                     | - Telemetry source validation                                                        |
-|                     | - No direct Sidecar → Core access                                                    |
-|                     | - Shadow Mode sandbox identity isolation                                             |
-|---------------------|--------------------------------------------------------------------------------------|
-| **T — Tampering**   | - Immutable constraints enforced by Envelope                                         |
-|                     | - Schema validation in Verifier Agent                                                |
-|                     | - Conflict detection against live config                                             |
-|                     | - Proposal Bus message integrity checks                                              |
-|                     | - Shadow Mode replay integrity                                                       |
-|                     | - Read‑only traffic snapshots for simulation                                         |
-|                     | - Fallback Mode freezes last known good config                                       |
-|---------------------|--------------------------------------------------------------------------------------|
-| **R — Repudiation** | - Full audit logs for all agent actions                                              |
-|                     | - Proposal lineage tracking (Planner → Verifier → Safety → Observer)                |
-|                     | - Envelope decision logs                                                             |
-|                     | - Shadow Mode simulation logs                                                        |
-|                     | - Immutable event history                                                            |
-|---------------------|--------------------------------------------------------------------------------------|
-| **I — Information Disclosure** | - Telemetry redaction and minimization                                   |
-|                                | - Sidecar receives only summarized metrics                                |
-|                                | - Shadow Mode receives only snapshots, never live traffic                 |
-|                                | - Proposal Bus metadata sanitization                                      |
-|                                | - Strict separation of trust zones                                        |
-|                                | - No raw request data leaves Gateway Core                                 |
-|---------------------|--------------------------------------------------------------------------------------|
-| **D — Denial of Service** | - Rate limiting in Gateway Core                                               |
-|                           | - Backpressure on Proposal Bus                                                 |
-|                           | - Envelope cooldowns and bounded deltas                                        |
-|                           | - Shadow Mode resource quotas                                                  |
-|                           | - Agent health monitoring                                                      |
-|                           | - Automatic Fallback Mode on overload                                          |
-|---------------------|--------------------------------------------------------------------------------------|
-| **E — Elevation of Privilege** | - Envelope as mandatory gatekeeper                                       |
-|                                | - Shadow Mode as mandatory simulation barrier                             |
-|                                | - Multi‑agent consensus                                                   |
-|                                | - Immutable constraints                                                   |
-|                                | - No Sidecar → Core write path                                            |
-|                                | - Fallback Mode overrides all agent influence                             |
-```
+| STRIDE Threat Class              | Mitigation Controls                                                         |
+|----------------------------------|-----------------------------------------------------------------------------|
+| **S — Spoofing**                 | - mTLS between all internal components                                      |
+|                                  | - Strict identity boundaries for agents                                     |
+|                                  | - Signed proposals with lineage metadata                                    |
+|                                  | - Envelope identity verification                                            |
+|                                  | - Telemetry source validation                                               |
+|                                  | - No direct Sidecar → Core access                                           |
+|                                  | - Shadow Mode sandbox identity isolation                                    |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| **T — Tampering**                | - Immutable constraints enforced by Envelope                                |
+|                                  | - Schema validation in Verifier Agent                                       |
+|                                  | - Conflict detection against live config                                    |
+|                                  | - Proposal Bus message integrity checks                                     |
+|                                  | - Shadow Mode replay integrity                                              |
+|                                  | - Read‑only traffic snapshots for simulation                                |
+|                                  | - Fallback Mode freezes last known good config                              |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| **R — Repudiation**              | - Full audit logs for all agent actions                                     |
+|                                  | - Proposal lineage tracking (Planner → Verifier → Safety → Observer)        |
+|                                  | - Envelope decision logs                                                    |
+|                                  | - Shadow Mode simulation logs                                               |
+|                                  | - Immutable event history                                                   |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| **I — Information Disclosure**   | - Telemetry redaction and minimization                                      |
+|                                  | - Sidecar receives only summarized metrics                                  |
+|                                  | - Shadow Mode receives only snapshots, never live traffic                   |
+|                                  | - Proposal Bus metadata sanitization                                        |
+|                                  | - Strict separation of trust zones                                          |
+|                                  | - No raw request data leaves Gateway Core                                   |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| **D — Denial of Service**        | - Rate limiting in Gateway Core                                             |
+|                                  | - Backpressure on Proposal Bus                                              |
+|                                  | - Envelope cooldowns and bounded deltas                                     |
+|                                  | - Shadow Mode resource quotas                                               |
+|                                  | - Agent health monitoring                                                   |
+|                                  | - Automatic Fallback Mode on overload                                       |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| **E — Elevation of Privilege**   | - Envelope as mandatory gatekeeper                                          |
+|                                  | - Shadow Mode as mandatory simulation barrier                               |
+|                                  | - Multi‑agent consensus                                                     |
+|                                  | - Immutable constraints                                                     |
+|                                  | - No Sidecar → Core write path                                              |
+|                                  | - Fallback Mode overrides all agent influence                               |
 
 ---
 
@@ -2846,16 +2842,14 @@ The scoring model uses a simple, industry‑standard scale:
 
 Below is the full matrix.
 
-```markdown
-| STRIDE Threat Class | Likelihood | Impact | Resulting Risk Level | Rationale |
-|---------------------|------------|--------|-----------------------|-----------|
-| **S — Spoofing**    | Medium     | High   | **High**              | External clients, agents, and bus messages can be spoofed without strong identity controls. Envelope and mTLS reduce but do not eliminate risk. |
-| **T — Tampering**   | Medium     | High   | **High**              | Proposals, telemetry, and simulation inputs can be tampered with if boundaries fail. Envelope and Verifier mitigate but risk remains significant. |
-| **R — Repudiation** | Low        | Medium | **Medium**            | Strong audit logs reduce likelihood, but missing lineage or log failures can cause disputes. |
-| **I — Information Disclosure** | Medium | High | **High** | Telemetry, proposals, and snapshots may leak sensitive data if boundaries or redaction fail. |
-| **D — Denial of Service** | High | High | **Critical** | Gateway Core, Sidecar, Proposal Bus, and Shadow Mode are all susceptible to overload. DoS is the most likely and most impactful threat. |
-| **E — Elevation of Privilege** | Low | High | **High** | Envelope and Shadow Mode provide strong barriers, but any bypass would be catastrophic. |
-```
+| STRIDE Threat Class            | Likelihood | Impact | Resulting Risk Level | Rationale                                                                                                                                         |
+|--------------------------------|------------|--------|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| **S — Spoofing**               | Medium     | High   | **High**             | External clients, agents, and bus messages can be spoofed without strong identity controls. Envelope and mTLS reduce but do not eliminate risk.   |
+| **T — Tampering**              | Medium     | High   | **High**             | Proposals, telemetry, and simulation inputs can be tampered with if boundaries fail. Envelope and Verifier mitigate but risk remains significant. |
+| **R — Repudiation**            | Low        | Medium | **Medium**           | Strong audit logs reduce likelihood, but missing lineage or log failures can cause disputes.                                                      |
+| **I — Information Disclosure** | Medium     | High   | **High**             | Telemetry, proposals, and snapshots may leak sensitive data if boundaries or redaction fail.                                                      |
+| **D — Denial of Service**      | High       | High   | **Critical**         | Gateway Core, Sidecar, Proposal Bus, and Shadow Mode are all susceptible to overload. DoS is the most likely and most impactful threat.           |
+| **E — Elevation of Privilege** | Low        | High   | **High**             | Envelope and Shadow Mode provide strong barriers, but any bypass would be catastrophic.                                                           |
 
 ---
 
@@ -2998,16 +2992,14 @@ It’s the final piece of your STRIDE threat‑modeling suite.
 
 # **Risk‑to‑Control Traceability Matrix**
 
-```markdown
-| STRIDE Threat Class | Risk Level | Primary Controls | Secondary Controls | Enforcement Layer |
-|---------------------|------------|------------------|--------------------|-------------------|
-| **S — Spoofing**    | High       | - mTLS everywhere<br>- Strict agent identity<br>- Signed proposals<br>- Envelope identity checks | - Telemetry source validation<br>- No Sidecar → Core write path | Envelope, Core, Proposal Bus |
-| **T — Tampering**   | High       | - Immutable constraints<br>- Schema validation<br>- Conflict detection | - Proposal Bus integrity checks<br>- Shadow Mode replay integrity<br>- Read‑only snapshots | Envelope, Verifier, Shadow Mode |
-| **R — Repudiation** | Medium     | - Full audit logs<br>- Proposal lineage tracking | - Immutable event history<br>- Simulation logs | Envelope, Sidecar, Shadow Mode |
-| **I — Information Disclosure** | High | - Telemetry redaction<br>- Data minimization<br>- Snapshot isolation | - Proposal metadata sanitization<br>- Strict trust boundaries | Core, Sidecar, Shadow Mode |
-| **D — Denial of Service** | Critical | - Rate limiting<br>- Backpressure on Proposal Bus<br>- Envelope cooldowns | - Shadow Mode quotas<br>- Agent health monitoring<br>- Automatic fallback | Core, Bus, Envelope, Fallback |
-| **E — Elevation of Privilege** | High | - Envelope as mandatory gatekeeper<br>- Shadow Mode as mandatory simulation<br>- Multi‑agent consensus | - Immutable constraints<br>- No Sidecar → Core write path<br>- Fallback override | Envelope, Shadow Mode, Core |
-```
+| STRIDE Threat Class            | Risk Level | Primary Controls                                                                                       | Secondary Controls                                                                         | Enforcement Layer               |
+|--------------------------------|------------|--------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|---------------------------------|
+| **S — Spoofing**               | High       | - mTLS everywhere<br>- Strict agent identity<br>- Signed proposals<br>- Envelope identity checks       | - Telemetry source validation<br>- No Sidecar → Core write path                            | Envelope, Core, Proposal Bus    |
+| **T — Tampering**              | High       | - Immutable constraints<br>- Schema validation<br>- Conflict detection                                 | - Proposal Bus integrity checks<br>- Shadow Mode replay integrity<br>- Read‑only snapshots | Envelope, Verifier, Shadow Mode |
+| **R — Repudiation**            | Medium     | - Full audit logs<br>- Proposal lineage tracking                                                       | - Immutable event history<br>- Simulation logs                                             | Envelope, Sidecar, Shadow Mode  |
+| **I — Information Disclosure** | High       | - Telemetry redaction<br>- Data minimization<br>- Snapshot isolation                                   | - Proposal metadata sanitization<br>- Strict trust boundaries                              | Core, Sidecar, Shadow Mode      |
+| **D — Denial of Service**      | Critical   | - Rate limiting<br>- Backpressure on Proposal Bus<br>- Envelope cooldowns                              | - Shadow Mode quotas<br>- Agent health monitoring<br>- Automatic fallback                  | Core, Bus, Envelope, Fallback   |
+| **E — Elevation of Privilege** | High       | - Envelope as mandatory gatekeeper<br>- Shadow Mode as mandatory simulation<br>- Multi‑agent consensus | - Immutable constraints<br>- No Sidecar → Core write path<br>- Fallback override           | Envelope, Shadow Mode, Core     |
 
 ---
 
@@ -3195,16 +3187,14 @@ Residual risk is acceptable because no single subsystem can escalate privileges.
 
 # **Summary Table**
 
-```markdown
-| STRIDE Threat | Risk Level | Treatment Strategy | Residual Risk | Acceptance Justification |
-|---------------|------------|--------------------|----------------|---------------------------|
-| Spoofing      | High       | Mitigate           | Low            | Strong identity + Envelope gating |
-| Tampering     | High       | Mitigate           | Low            | Immutable constraints + Shadow Mode |
-| Repudiation   | Medium     | Mitigate + Accept  | Low‑Medium     | Logs are immutable and comprehensive |
-| Info Disclosure | High     | Mitigate           | Low            | Strict data minimization + isolation |
-| DoS           | Critical   | Mitigate + Transfer + Accept | Medium | DoS cannot be fully eliminated |
-| Elevation of Privilege | High | Mitigate | Very Low | Envelope + Shadow Mode + constraints |
-```
+| STRIDE Threat          | Risk Level | Treatment Strategy           | Residual Risk | Acceptance Justification             |
+|------------------------|------------|------------------------------|---------------|--------------------------------------|
+| Spoofing               | High       | Mitigate                     | Low           | Strong identity + Envelope gating    |
+| Tampering              | High       | Mitigate                     | Low           | Immutable constraints + Shadow Mode  |
+| Repudiation            | Medium     | Mitigate + Accept            | Low‑Medium    | Logs are immutable and comprehensive |
+| Info Disclosure        | High       | Mitigate                     | Low           | Strict data minimization + isolation |
+| DoS                    | Critical   | Mitigate + Transfer + Accept | Medium        | DoS cannot be fully eliminated       |
+| Elevation of Privilege | High       | Mitigate                     | Very Low      | Envelope + Shadow Mode + constraints |
 
 ---
 
@@ -3452,41 +3442,39 @@ This is the kind of artifact that makes auditors smile.
 
 # **Compliance‑Checker Rule Matrix**
 
-```markdown
-| Subsystem | Requirement Category | Compliance Rule | Rule Type | Enforcement Layer | Static or Dynamic |
-|-----------|----------------------|------------------|-----------|-------------------|-------------------|
-| **Gateway Core** | Identity | All external requests must be authenticated | Auth Rule | Core Middleware | Dynamic |
-| | Integrity | Config changes must come only from Envelope | Config Source Rule | Core + Envelope | Static |
-| | Confidentiality | No raw request data may leave Core | Telemetry Redaction Rule | Core Telemetry | Dynamic |
-| | Availability | Rate limits must be enforced | Rate Limit Rule | Core Middleware | Dynamic |
-| **Middleware Stack** | Integrity | Headers must be validated and sanitized | Header Validation Rule | Middleware | Dynamic |
-| | Confidentiality | Sensitive headers must be redacted in logs | Log Redaction Rule | Middleware | Static |
-| | Availability | Middleware must enforce body size limits | Body Limit Rule | Middleware | Dynamic |
-| **Proxy Router** | Identity | Backend identity must be validated (mTLS) | Backend Identity Rule | Router | Dynamic |
-| | Integrity | Routing tables must match Envelope constraints | Route Integrity Rule | Router + Envelope | Static |
-| | Availability | Per‑route rate limits must be applied | Route Rate Limit Rule | Router | Dynamic |
-| **Agentic Sidecar** | Identity | Agents must sign all proposals | Proposal Signature Rule | Sidecar | Static |
-| | Integrity | Proposal structure must match schema | Schema Validation Rule | Verifier | Static |
-| | Confidentiality | Sidecar must not receive raw traffic | Telemetry Minimization Rule | Core → Sidecar | Static |
-| | Availability | Agents must not exceed token or CPU quotas | Agent Health Rule | Sidecar | Dynamic |
-| **Proposal Bus** | Identity | Message sender must be authenticated | Bus Identity Rule | Bus | Static |
-| | Integrity | Messages must be immutable once queued | Message Immutability Rule | Bus | Static |
-| | Availability | Queue must enforce backpressure | Queue Backpressure Rule | Bus | Dynamic |
-| **Agentic Envelope** | Integrity | All proposals must satisfy immutable constraints | Constraint Rule | Envelope | Static |
-| | Integrity | All proposals must satisfy bounded deltas | Delta Bound Rule | Envelope | Static |
-| | Integrity | Cooldowns must be respected | Cooldown Rule | Envelope | Dynamic |
-| | Integrity | Signal dampening must be applied | Dampening Rule | Envelope | Dynamic |
-| | Identity | Only known agents may submit proposals | Agent Identity Rule | Envelope | Static |
-| **Shadow Mode** | Integrity | Simulation must use read‑only snapshots | Snapshot Integrity Rule | Shadow Mode | Static |
-| | Integrity | Replay must match recorded traffic | Replay Fidelity Rule | Shadow Mode | Dynamic |
-| | Integrity | SLO validation must pass thresholds | SLO Rule | Shadow Mode | Dynamic |
-| | Integrity | Regression detection must show no degradation | Regression Rule | Shadow Mode | Dynamic |
-| **Fallback Mode** | Integrity | Fallback must freeze last known good config | Freeze Rule | Core | Static |
-| | Availability | All proposals must be rejected during fallback | Reject Rule | Core | Dynamic |
-| **Backend Services** | Identity | Backend must authenticate Gateway Core | Backend Auth Rule | Backend | Dynamic |
-| | Integrity | Backend responses must be validated | Response Integrity Rule | Core Router | Dynamic |
-| | Availability | Backend must enforce rate limits | Backend Rate Limit Rule | Backend | Dynamic |
-```
+| Subsystem            | Requirement Category | Compliance Rule                                  | Rule Type                   | Enforcement Layer | Static or Dynamic |
+|----------------------|----------------------|--------------------------------------------------|-----------------------------|-------------------|-------------------|
+| **Gateway Core**     | Identity             | All external requests must be authenticated      | Auth Rule                   | Core Middleware   | Dynamic           |
+|                      | Integrity            | Config changes must come only from Envelope      | Config Source Rule          | Core + Envelope   | Static            |
+|                      | Confidentiality      | No raw request data may leave Core               | Telemetry Redaction Rule    | Core Telemetry    | Dynamic           |
+|                      | Availability         | Rate limits must be enforced                     | Rate Limit Rule             | Core Middleware   | Dynamic           |
+| **Middleware Stack** | Integrity            | Headers must be validated and sanitized          | Header Validation Rule      | Middleware        | Dynamic           |
+|                      | Confidentiality      | Sensitive headers must be redacted in logs       | Log Redaction Rule          | Middleware        | Static            |
+|                      | Availability         | Middleware must enforce body size limits         | Body Limit Rule             | Middleware        | Dynamic           |
+| **Proxy Router**     | Identity             | Backend identity must be validated (mTLS)        | Backend Identity Rule       | Router            | Dynamic           |
+|                      | Integrity            | Routing tables must match Envelope constraints   | Route Integrity Rule        | Router + Envelope | Static            |
+|                      | Availability         | Per‑route rate limits must be applied            | Route Rate Limit Rule       | Router            | Dynamic           |
+| **Agentic Sidecar**  | Identity             | Agents must sign all proposals                   | Proposal Signature Rule     | Sidecar           | Static            |
+|                      | Integrity            | Proposal structure must match schema             | Schema Validation Rule      | Verifier          | Static            |
+|                      | Confidentiality      | Sidecar must not receive raw traffic             | Telemetry Minimization Rule | Core → Sidecar    | Static            |
+|                      | Availability         | Agents must not exceed token or CPU quotas       | Agent Health Rule           | Sidecar           | Dynamic           |
+| **Proposal Bus**     | Identity             | Message sender must be authenticated             | Bus Identity Rule           | Bus               | Static            |
+|                      | Integrity            | Messages must be immutable once queued           | Message Immutability Rule   | Bus               | Static            |
+|                      | Availability         | Queue must enforce backpressure                  | Queue Backpressure Rule     | Bus               | Dynamic           |
+| **Agentic Envelope** | Integrity            | All proposals must satisfy immutable constraints | Constraint Rule             | Envelope          | Static            |
+|                      | Integrity            | All proposals must satisfy bounded deltas        | Delta Bound Rule            | Envelope          | Static            |
+|                      | Integrity            | Cooldowns must be respected                      | Cooldown Rule               | Envelope          | Dynamic           |
+|                      | Integrity            | Signal dampening must be applied                 | Dampening Rule              | Envelope          | Dynamic           |
+|                      | Identity             | Only known agents may submit proposals           | Agent Identity Rule         | Envelope          | Static            |
+| **Shadow Mode**      | Integrity            | Simulation must use read‑only snapshots          | Snapshot Integrity Rule     | Shadow Mode       | Static            |
+|                      | Integrity            | Replay must match recorded traffic               | Replay Fidelity Rule        | Shadow Mode       | Dynamic           |
+|                      | Integrity            | SLO validation must pass thresholds              | SLO Rule                    | Shadow Mode       | Dynamic           |
+|                      | Integrity            | Regression detection must show no degradation    | Regression Rule             | Shadow Mode       | Dynamic           |
+| **Fallback Mode**    | Integrity            | Fallback must freeze last known good config      | Freeze Rule                 | Core              | Static            |
+|                      | Availability         | All proposals must be rejected during fallback   | Reject Rule                 | Core              | Dynamic           |
+| **Backend Services** | Identity             | Backend must authenticate Gateway Core           | Backend Auth Rule           | Backend           | Dynamic           |
+|                      | Integrity            | Backend responses must be validated              | Response Integrity Rule     | Core Router       | Dynamic           |
+|                      | Availability         | Backend must enforce rate limits                 | Backend Rate Limit Rule     | Backend           | Dynamic           |
 
 ---
 
@@ -3663,6 +3651,7 @@ Assume you’ve already parsed DSL into `Rule` structs and have a `Context` with
 
 ```go
 // internal/compliance/dsl/model.go
+package gateway;
 type Rule struct {
     ID       string
     Name     string
@@ -3676,6 +3665,7 @@ type Rule struct {
 
 ```go
 // internal/compliance/engine/context.go
+package gateway;
 type Context struct {
     Core     CoreState
     Sidecar  SidecarState
@@ -3704,12 +3694,32 @@ type EnvelopeState struct {
         Immutable bool
     }
 }
+
+type ShadowState struct {
+	Mode   string
+	Config struct {
+		Source string
+	}
+}
+
+type FallbackState struct {
+	Mode   string
+	Config struct {
+		Source string
+	}
+}
 ```
 
 #### 3.2 Evaluator skeleton
 
 ```go
 // internal/compliance/engine/evaluator.go
+package gateway
+import (
+	"Context"
+)
+
+
 type Evaluator interface {
     Eval(expr string, ctx Context) (bool, error)
 }
@@ -3719,6 +3729,7 @@ type Evaluator interface {
 
 ```go
 // internal/compliance/engine/engine.go
+package gateway
 type Result struct {
     RuleID    string
     Name      string
@@ -3863,7 +3874,6 @@ You want both **human** and **machine** views.
 
 #### 4.2 Markdown scorecard (human‑readable)
 
-```markdown
 # Compliance Scorecard
 
 ## Summary
@@ -3879,18 +3889,17 @@ You want both **human** and **machine** views.
 
 ## Failed Rules
 
-| Rule ID                      | Severity | Target           | Message                                      |
-|-----------------------------|----------|------------------|----------------------------------------------|
-| CORE_CONFIG_FROM_ENVELOPE   | critical | Core.Integrity   | assertion failed: core.config.source = manual |
+| Rule ID                   | Severity | Target         | Message                                       |
+|---------------------------|----------|----------------|-----------------------------------------------|
+| CORE_CONFIG_FROM_ENVELOPE | critical | Core.Integrity | assertion failed: core.config.source = manual |
 
 ## All Rules
 
-| Rule ID                      | Severity | Target                 | Passed | Message   |
-|-----------------------------|----------|------------------------|--------|-----------|
-| CORE_CONFIG_FROM_ENVELOPE   | critical | Core.Integrity         | false  | assertion failed: core.config.source = manual |
-| SIDECAR_NO_RAW_TRAFFIC      | error    | Sidecar.Confidentiality| true   | passed    |
-| ENVELOPE_CONSTRAINTS_ENABLED| critical | Envelope.Integrity     | true   | passed    |
-```
+| Rule ID                      | Severity | Target                  | Passed | Message                                       |
+|------------------------------|----------|-------------------------|--------|-----------------------------------------------|
+| CORE_CONFIG_FROM_ENVELOPE    | critical | Core.Integrity          | false  | assertion failed: core.config.source = manual |
+| SIDECAR_NO_RAW_TRAFFIC       | error    | Sidecar.Confidentiality | true   | passed                                        |
+| ENVELOPE_CONSTRAINTS_ENABLED | critical | Envelope.Integrity      | true   | passed                                        |
 
 ---
 

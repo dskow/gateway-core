@@ -68,7 +68,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 func (h *Handler) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+			h.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
 				"error": "Method Not Allowed",
 			})
 			return
@@ -77,7 +77,7 @@ func (h *Handler) guard(next http.HandlerFunc) http.HandlerFunc {
 		ip := extractIP(r.RemoteAddr)
 		if !h.isAllowed(ip) {
 			h.logger.Warn("admin access denied", "client_ip", ip, "path", r.URL.Path)
-			writeJSON(w, http.StatusForbidden, map[string]string{
+			h.writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "Forbidden",
 			})
 			return
@@ -117,7 +117,7 @@ type routeStatus struct {
 	CircuitBreakerState string   `json:"circuit_breaker_state"`
 }
 
-func (h *Handler) routesHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) routesHandler(w http.ResponseWriter, _ *http.Request) {
 	statuses := make([]routeStatus, len(h.routes))
 	for i, route := range h.routes {
 		cbState := "unknown"
@@ -140,10 +140,10 @@ func (h *Handler) routesHandler(w http.ResponseWriter, r *http.Request) {
 			CircuitBreakerState: cbState,
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"routes": statuses})
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{"routes": statuses})
 }
 
-func (h *Handler) configHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) configHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := h.reloader.Current()
 
 	// Deep copy and redact sensitive fields.
@@ -152,7 +152,7 @@ func (h *Handler) configHandler(w http.ResponseWriter, r *http.Request) {
 		redacted.Auth.JWTSecret = "***"
 	}
 
-	writeJSON(w, http.StatusOK, redacted)
+	h.writeJSON(w, http.StatusOK, redacted)
 }
 
 func (h *Handler) limitersHandler(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +183,7 @@ func (h *Handler) limitersHandler(w http.ResponseWriter, r *http.Request) {
 		end = total
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"entries": entries[start:end],
 		"total":   total,
 		"page":    page,
@@ -202,8 +202,10 @@ func parseInt(s string) int {
 	return n
 }
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func (h *Handler) writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v) //nolint:errcheck
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		h.logger.Debug("admin: failed to encode response", "status", status, "error", err)
+	}
 }

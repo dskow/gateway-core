@@ -1,6 +1,6 @@
 # **Design Patterns Remediation Plan & Progress Tracker**
 
-Companion document to [DESIGN_PATTERNS.md](DESIGN_PATTERNS.md). This plan sequences the pattern-level remediations surfaced there into phases that fit the [ARCHITECTURE.md](ARCHITECTURE.md) principles and the quarterly themes in [API_GATEWAY_MAIN_PLAN_2030.md](API_GATEWAY_MAIN_PLAN_2030.md).
+Companion document to [DESIGN_PATTERNS.md](DESIGN_PATTERNS.md). This plan sequences the pattern-level remediation surfaced there into phases that fit the [ARCHITECTURE.md](ARCHITECTURE.md) principles and the quarterly themes in [API_GATEWAY_MAIN_PLAN_2030.md](API_GATEWAY_MAIN_PLAN_2030.md).
 
 ---
 
@@ -23,11 +23,11 @@ Each work item has an ID (`DP-NNN`) for use in commit messages, PR titles, and i
 
 ### **2.2 Mapping to the 2030 Roadmap**
 
-| Quarter | Theme | DP items that land here | Why |
-|---|---|---|---|
-| **Q1 — Foundation** | AI-agnostic core | DP-006, DP-007, DP-008 (cleanup), DP-005 (Steady State), DP-002 (Metrics DI), DP-001 + DP-003 (Observer + Gateway struct) | These are foundational-core stability items. The 2030 plan calls out "declarative configuration, hot reload, health checks" as non-negotiable — DP-001 directly hardens hot reload. |
-| **Q2 — Observability** | OTel, dashboards, structured logs | DP-004 (Distributed Tracing) | DP-004 is literally the Q2 deliverable; the 2030 plan calls out OpenTelemetry by name. |
-| **Q4 — Agentic Layer** | Agentic sidecar, envelope, shadow mode | DP-009 (Sidecar/Ambassador formalization) | §8.3 of DESIGN_PATTERNS.md notes the sidecar is named in architecture but not yet realized. Building it in Q4 requires DP-001 to already be done (rollback-capable observer is the core of the Envelope's proposal-application flow). |
+| Quarter                | Theme                                  | DP items that land here                                                                                                   | Why                                                                                                                                                                                                                                   |
+|------------------------|----------------------------------------|---------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Q1 — Foundation**    | AI-agnostic core                       | DP-006, DP-007, DP-008 (cleanup), DP-005 (Steady State), DP-002 (Metrics DI), DP-001 + DP-003 (Observer + Gateway struct) | These are foundational-core stability items. The 2030 plan calls out "declarative configuration, hot reload, health checks" as non-negotiable — DP-001 directly hardens hot reload.                                                   |
+| **Q2 — Observability** | OTel, dashboards, structured logs      | DP-004 (Distributed Tracing)                                                                                              | DP-004 is literally the Q2 deliverable; the 2030 plan calls out OpenTelemetry by name.                                                                                                                                                |
+| **Q4 — Agentic Layer** | Agentic sidecar, envelope, shadow mode | DP-009 (Sidecar/Ambassador formalization)                                                                                 | §8.3 of DESIGN_PATTERNS.md notes the sidecar is named in architecture but not yet realized. Building it in Q4 requires DP-001 to already be done (rollback-capable observer is the core of the Envelope's proposal-application flow). |
 
 ### **2.3 The causal chain that makes this plan coherent**
 
@@ -44,7 +44,7 @@ flowchart LR
     DP001 --> DP009
 ```
 
-Reading left to right: **the design-pattern refactors are the critical path to the Agentic Envelope.** An envelope that applies proposals via a callback-without-rollback is exactly the anti-pattern the 2030 plan's "signal dampening" and "bounded deltas" are designed to prevent — so DP-001 is load-bearing for Q4.
+Reading left to right: **the design-pattern refactors are the critical path to the Agentic Envelope.** An envelope that applies proposals via a callback-without-rollback is exactly the antipattern the 2030 plan's "signal dampening" and "bounded deltas" are designed to prevent — so DP-001 is load-bearing for Q4.
 
 ---
 
@@ -75,7 +75,7 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
 - **Depends on**: DP-003 (preferred — observers become methods on `*Gateway` rather than closures in `main()`). Can be delivered standalone if DP-003 slips.
 - **Files**: [`internal/config/reload.go`](../internal/config/reload.go), [`cmd/gateway/main.go`](../cmd/gateway/main.go)
 - **Acceptance criteria**:
-  - [x] `type ConfigObserver interface { OnReload(old, new *config.Config) error }` in [`internal/config/reload.go`](../internal/config/reload.go).
+  - [x] `type Observer interface { OnReload(old, new *config.Config) error }` in [`internal/config/reload.go`](../internal/config/reload.go).
   - [x] `Reloader.Reload()` rolls back `r.current` to `old` on any observer error.
   - [x] Integration test: observer returning an error leaves `Reloader.Current()` unchanged (`TestReloader_ObserverErrorRollsBack`).
   - [x] Integration test: panic in observer is recovered, logged, counted as rollback (`TestReloader_ObserverPanicRollsBack`).
@@ -119,7 +119,7 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
   - [x] `func NewGateway(ctx, cfg, logger, opts) (*Gateway, error)` — constructs components in strict dependency order (Metrics → Breakers → Router → Limiter → middleware stack → mux → Reloader → Server).
   - [x] `(*Gateway).Run(ctx) error` — owns the HTTP server lifecycle; graceful shutdown bounded by `cfg.Server.ShutdownTimeout`.
   - [x] `main()` fits on one screen: flag parsing → `config.Load` → logger → `NewGateway` → `gw.Run(ctx)`.
-  - [x] `Gateway` implements `ConfigObserver` (used by DP-001; the limiter + breakers + routes atom are updated idempotently in `OnReload`).
+  - [x] `Gateway` implements `config.Observer` (used by DP-001; the limiter + breakers + routes atom are updated idempotently in `OnReload`).
   - [x] Table-driven end-to-end test (`TestGateway_EndToEnd`) plus `TestGateway_IsolatedMetricsRegistry`.
 - **Status**: ☑ Complete (2026-04-17)
 
@@ -224,12 +224,12 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
 - **Quarter**: Q4 — this is the Q4 Agentic Layer themed deliverable.
 - **Risk avoided**: communication / onboarding — the team will reason about the Agentic Sidecar more clearly when it is labeled with the well-known CNCF pattern name.
 - **Effort**: Small (docs); Medium (when the sidecar is actually built)
-- **Depends on**: DP-001 (rollback observer), DP-003 (Gateway struct — proposals arrive as `ConfigObserver`-shaped updates), DP-004 (spans to analyze)
+- **Depends on**: DP-001 (rollback observer), DP-003 (Gateway struct — proposals arrive as `config.Observer`-shaped updates), DP-004 (spans to analyze)
 - **Files**: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), the Q4 sidecar implementation code when it lands.
 - **Acceptance criteria**:
-  - [ ] ARCHITECTURE.md §"Agentic Sidecar Layer" explicitly names the CNCF *Sidecar* pattern and the *Ambassador* pattern where relevant.
+  - [ ] ARCHITECTURE.md "Agentic Sidecar Layer" explicitly names the CNCF *Sidecar* pattern and the *Ambassador* pattern where relevant.
   - [ ] The Agentic Envelope is labeled as a *Gatekeeper* pattern instance.
-  - [ ] The proposal-application flow documented as: agent → envelope → `ConfigObserver.OnReload` → rollback-on-rejection (reusing DP-001 directly).
+  - [ ] The proposal-application flow documented as: agent → envelope → `config.Observer.OnReload` → rollback-on-rejection (reusing DP-001 directly).
   - [ ] When the sidecar is built in Q4, its directory (`internal/sidecar/` proposed) has a README that cites the CNCF patterns it implements.
 - **Status**: ☐ Not started (docs portion can be done in Q1 as a quick write; code portion is Q4)
 
@@ -241,11 +241,11 @@ All items reference the §6 flaw table in [DESIGN_PATTERNS.md](DESIGN_PATTERNS.m
 
 Tiny, isolated, no dependencies. Can be done by one engineer in a week. Unblocks confidence in later refactors because the diff-noise floor is lowered.
 
-| ID | Title | Effort |
-|---|---|---|
-| DP-007 | `Load` / `LoadFromBytes` dedupe | Tiny |
-| DP-006 | `CompositeBreaker` inner vs effective state | Tiny |
-| DP-008 | Proxy map keyed by backend URL | Small |
+| ID     | Title                                       | Effort |
+|--------|---------------------------------------------|--------|
+| DP-007 | `Load` / `LoadFromBytes` dedupe             | Tiny   |
+| DP-006 | `CompositeBreaker` inner vs effective state | Tiny   |
+| DP-008 | Proxy map keyed by backend URL              | Small  |
 
 **Exit criteria**: all three PRs merged, no behavior regressions, DESIGN_PATTERNS.md §6 rows 6–8 marked ✅.
 
@@ -259,7 +259,7 @@ The load-bearing set. Ordered so each step reduces risk for the next.
 
 1. **DP-005 — Steady State janitor.** Independent, high-confidence, produces immediately-useful metrics. Do this first to build trust in the Phase 1 cadence.
 2. **DP-002 — Metrics DI.** Pre-requisite for DP-003; also enables per-test metric isolation, which the DP-003 end-to-end test needs.
-3. **DP-003 — `Gateway` struct / DI.** Restructures `main()` and creates the `*Gateway` type that will receive `ConfigObserver` hooks next.
+3. **DP-003 — `Gateway` struct / DI.** Restructures `main()` and creates the `*Gateway` type that will receive `config.Observer` hooks next.
 4. **DP-001 — Observer with rollback.** Final Phase 1 item because it is the highest-risk refactor and now lands on cleanly-structured code.
 
 **Exit criteria**: Phase 1 integration suite green; rollback counter and clients-tracked gauge visible in Prometheus; `main()` ≤ 40 LoC.
@@ -281,9 +281,9 @@ One item but a large one.
 ### **Phase 3 — Agentic readiness (Q3 → Q4)**
 
 - **DP-009 — Sidecar/Ambassador/Gatekeeper naming & docs** (Q3): update ARCHITECTURE.md ahead of the Q4 code landing so the design vocabulary is settled.
-- Q4 agentic-sidecar implementation then reuses the `ConfigObserver` + rollback contract from DP-001 as its proposal-application mechanism. No new rollback code is written for the Envelope — it is the same seam.
+- Q4 agentic-sidecar implementation then reuses the `config.Observer` + rollback contract from DP-001 as its proposal-application mechanism. No new rollback code is written for the Envelope — it is the same seam.
 
-**Exit criteria**: agentic sidecar applies proposals exclusively through `ConfigObserver.OnReload`; rollback counter correctly increments on rejected proposals; shadow-mode simulator uses the same seam without ever reaching the core.
+**Exit criteria**: agentic sidecar applies proposals exclusively through `config.Observer.OnReload`; rollback counter correctly increments on rejected proposals; shadow-mode simulator uses the same seam without ever reaching the core.
 
 ---
 
@@ -302,7 +302,7 @@ Check items as PRs merge.
 - [x] **DP-005** — Steady State janitor on `ratelimit.Limiter` *(2026-04-17; soak deferred)*
 - [x] **DP-002** — Metrics as injected `*Metrics` struct *(2026-04-17)*
 - [x] **DP-003** — `Gateway` struct replaces `main()` wiring *(2026-04-17)*
-- [x] **DP-001** — `ConfigObserver` with error return and rollback *(2026-04-17)*
+- [x] **DP-001** — `config.Observer` with error return and rollback *(2026-04-17)*
 
 ### **Phase 2 — Observability**
 
@@ -311,20 +311,20 @@ Check items as PRs merge.
 ### **Phase 3 — Agentic readiness**
 
 - [ ] **DP-009 (docs)** — CNCF pattern vocabulary in ARCHITECTURE.md
-- [ ] **DP-009 (code)** — Sidecar implementation uses the `ConfigObserver` seam from DP-001
+- [ ] **DP-009 (code)** — Sidecar implementation uses the `config.Observer` seam from DP-001
 
 ---
 
 ## **7. Risk Register**
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| DP-003 refactor accidentally changes middleware order | Medium | High — behavior change on the hot path | Before-after integration snapshot of full request/response for a set of canned requests. |
-| DP-002 breaks a dashboard that scrapes `gateway_*` metrics by accident | Medium | Medium — alerting gap | Preserve metric names exactly; run Prometheus scrape diff between `main` and refactor branch. |
-| DP-001 rollback leaves callbacks partially applied (a component already acted before a later one errored) | Medium | High — defeats the whole point | Observers must be *idempotent* and their `OnReload` implementations must be effectively transactional — document this contract and add a linter/test per observer. Revisit if any observer cannot meet it. |
-| DP-004 adds latency on the hot path | Low | Medium | No-op exporter by default; sampling config; benchmark gate in CI (p99 regression ≤ 1%). |
-| DP-005 janitor holds the write lock too long | Low | High — rate-limit stalls | Scan under RLock, mutate under Lock in batches; configurable batch size; benchmark gate. |
-| Scope creep — someone adds a feature flag or refactor inside a DP-NNN PR | Medium | Low–Medium | Each PR titled `DP-NNN: <single sentence>`; reviewer rejects unrelated changes. |
+| Risk                                                                                                      | Likelihood | Impact                                 | Mitigation                                                                                                                                                                                                 |
+|-----------------------------------------------------------------------------------------------------------|------------|----------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| DP-003 refactor accidentally changes middleware order                                                     | Medium     | High — behavior change on the hot path | Before-after integration snapshot of full request/response for a set of canned requests.                                                                                                                   |
+| DP-002 breaks a dashboard that scrapes `gateway_*` metrics by accident                                    | Medium     | Medium — alerting gap                  | Preserve metric names exactly; run Prometheus scrape diff between `main` and refactor branch.                                                                                                              |
+| DP-001 rollback leaves callbacks partially applied (a component already acted before a later one errored) | Medium     | High — defeats the whole point         | Observers must be *idempotent* and their `OnReload` implementations must be effectively transactional — document this contract and add a linter/test per observer. Revisit if any observer cannot meet it. |
+| DP-004 adds latency on the hot path                                                                       | Low        | Medium                                 | No-op exporter by default; sampling config; benchmark gate in CI (p99 regression ≤ 1%).                                                                                                                    |
+| DP-005 janitor holds the write lock too long                                                              | Low        | High — rate-limit stalls               | Scan under RLock, mutate under Lock in batches; configurable batch size; benchmark gate.                                                                                                                   |
+| Scope creep — someone adds a feature flag or refactor inside a DP-NNN PR                                  | Medium     | Low–Medium                             | Each PR titled `DP-NNN: <single sentence>`; reviewer rejects unrelated changes.                                                                                                                            |
 
 ---
 
@@ -332,16 +332,16 @@ Check items as PRs merge.
 
 *Record notable decisions made during execution. Append-only. One line per entry.*
 
-| Date | DP ID | Decision | Rationale |
-|---|---|---|---|
-| 2026-04-16 | — | Plan created | Addresses DESIGN_PATTERNS.md §6 and §8 findings; sequenced against 2030 roadmap. |
-| 2026-04-17 | DP-007 | Private `load([]byte)` helper replaces duplicated pipeline in `Load` and `LoadFromBytes`. | Single source of truth for the expand → unmarshal → defaults → validate → warnings pipeline; both entry points stay in lockstep as steps are added (e.g. tracing config). |
-| 2026-04-17 | DP-006 | `CompositeBreaker` exposes `InnerState()` and `EffectiveState()`; `State()` aliases `InnerState()` for backward compat. | `State()` is referenced by the admin snapshot and metrics paths — keeping it as the failure-rate view preserves existing telemetry. `/ready` switches to `EffectiveState()` so a saturated bulkhead correctly marks the route unhealthy. |
-| 2026-04-17 | DP-008 | Proxy map keyed by normalized backend identity (`scheme://host:port` + path, via `backendKey`). | Two routes with identical `Backend` strings now share one `*httputil.ReverseProxy` + `Transport`. Path kept in the key so `http://api:8080/v1` and `http://api:8080/v2` retain separate Directors — the stdlib proxy prepends target path to each request. Later routes' `ConnectionPool` overrides on a shared backend are logged as warnings (first-wins). |
-| 2026-04-17 | DP-005 | `RateLimitConfig.IdleTTL` + `CleanupInterval` with `max(10×burst-refill, 10min)` default; scan under RLock, delete under Lock in 256-batch chunks with re-check. | Prevents per-IP memory growth under adversarial traffic without blocking the hot path during large evictions. Re-check under write lock handles the race where an active client refreshes `lastSeen` between scan and delete. `Close()` added (with `Stop` kept as alias) to make shutdown deterministic for the new Gateway lifecycle. |
-| 2026-04-17 | DP-002 | `metrics.New(reg)` returns `*Metrics`; package-level globals + `Init()` removed; collectors injected into proxy / ratelimit / auth / circuit breakers; `metrics.Handler(gatherer)` takes an explicit Gatherer. | Kills the double-`Init` panic and makes test isolation free (`metrics.NewForTest()`). Subsystems accept `nil *Metrics` to keep their tests minimal — a justified tradeoff since the alternative (nil-safe wrapper type) adds more code than a handful of nil guards. Collector names and labels are unchanged so existing scrape configs keep working. |
-| 2026-04-17 | DP-003 | `internal/gateway.Gateway` owns every long-lived component; `main()` shrinks to flag-parse + logger + `NewGateway` + `Run`. `Run` uses `signal.NotifyContext` for SIGINT/SIGTERM-driven graceful shutdown. | Restores testability — the full request path is now exercisable in-process with `gw.Handler()` and a fresh `prometheus.NewRegistry()`. Also unblocks DP-001: `Gateway` registers itself as a `ConfigObserver` so the limiter/breaker/routes hot-reload goes through the rollback pipeline instead of a fire-and-forget closure. `config.Reloader.SetPath` added to let Gateway be built before the final config path is known (in tests). |
-| 2026-04-17 | DP-001 | `ConfigObserver.OnReload(old, new) error` with panic recovery; rollback restores only `r.current` (observers must be idempotent per the plan's Risk Register). Rollback reasons are the low-cardinality labels `observer_error` / `observer_panic`; full error text / panic value goes to the log, not the Prometheus label. | Low-cardinality labels keep `gateway_config_reload_rollbacks_total{reason}` safe to alert on. Legacy `OnReload(func(*Config))` callbacks preserved for fire-and-forget hooks (admin snapshots, cert reload) but now run *after* every observer has accepted, so a rejected reload does not half-apply to logging/snapshot sinks. Counter is wired through an interface (`RollbackRecorder`) so `internal/config` does not import `internal/metrics`, which keeps the cycle graph clean as more subsystems grow reload needs. |
+| Date       | DP ID  | Decision                                                                                                                                                                                                                                                                                                                      | Rationale                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+|------------|--------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 2026-04-16 | —      | Plan created                                                                                                                                                                                                                                                                                                                  | Addresses DESIGN_PATTERNS.md §6 and §8 findings; sequenced against 2030 roadmap.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 2026-04-17 | DP-007 | Private `load([]byte)` helper replaces duplicated pipeline in `Load` and `LoadFromBytes`.                                                                                                                                                                                                                                     | Single source of truth for the expand → unmarshal → defaults → validate → warnings pipeline; both entry points stay in lockstep as steps are added (e.g. tracing config).                                                                                                                                                                                                                                                                                                                                                    |
+| 2026-04-17 | DP-006 | `CompositeBreaker` exposes `InnerState()` and `EffectiveState()`; `State()` aliases `InnerState()` for backward compat.                                                                                                                                                                                                       | `State()` is referenced by the admin snapshot and metrics paths — keeping it as the failure-rate view preserves existing telemetry. `/ready` switches to `EffectiveState()` so a saturated bulkhead correctly marks the route unhealthy.                                                                                                                                                                                                                                                                                     |
+| 2026-04-17 | DP-008 | Proxy map keyed by normalized backend identity (`scheme://host:port` + path, via `backendKey`).                                                                                                                                                                                                                               | Two routes with identical `Backend` strings now share one `*httputil.ReverseProxy` + `Transport`. Path kept in the key so `http://api:8080/v1` and `http://api:8080/v2` retain separate Directors — the stdlib proxy prepends target path to each request. Later routes' `ConnectionPool` overrides on a shared backend are logged as warnings (first-wins).                                                                                                                                                                 |
+| 2026-04-17 | DP-005 | `RateLimitConfig.IdleTTL` + `CleanupInterval` with `max(10×burst-refill, 10min)` default; scan under RLock, delete under Lock in 256-batch chunks with re-check.                                                                                                                                                              | Prevents per-IP memory growth under adversarial traffic without blocking the hot path during large evictions. Re-check under write lock handles the race where an active client refreshes `lastSeen` between scan and delete. `Close()` added (with `Stop` kept as alias) to make shutdown deterministic for the new Gateway lifecycle.                                                                                                                                                                                      |
+| 2026-04-17 | DP-002 | `metrics.New(reg)` returns `*Metrics`; package-level globals + `Init()` removed; collectors injected into proxy / ratelimit / auth / circuit breakers; `metrics.Handler(gatherer)` takes an explicit Gatherer.                                                                                                                | Kills the double-`Init` panic and makes test isolation free (`metrics.New(prometheus.NewRegistry())`). Subsystems accept `nil *Metrics` to keep their tests minimal — a justified tradeoff since the alternative (nil-safe wrapper type) adds more code than a handful of nil guards. Collector names and labels are unchanged so existing scrape configs keep working.                                                                                                                                                      |
+| 2026-04-17 | DP-003 | `internal/gateway.Gateway` owns every long-lived component; `main()` shrinks to flag-parse + logger + `NewGateway` + `Run`. `Run` uses `signal.NotifyContext` for SIGINT/SIGTERM-driven graceful shutdown.                                                                                                                    | Restores testability — the full request path is now exercisable in-process with `gw.Handler()` and a fresh `prometheus.NewRegistry()`. Also unblocks DP-001: `Gateway` registers itself as a `config.Observer` so the limiter/breaker/routes hot-reload goes through the rollback pipeline instead of a fire-and-forget closure. `config.Reloader.SetPath` added to let Gateway be built before the final config path is known (in tests).                                                                                   |
+| 2026-04-17 | DP-001 | `config.Observer.OnReload(old, new) error` with panic recovery; rollback restores only `r.current` (observers must be idempotent per the plan's Risk Register). Rollback reasons are the low-cardinality labels `observer_error` / `observer_panic`; full error text / panic value goes to the log, not the Prometheus label. | Low-cardinality labels keep `gateway_config_reload_rollbacks_total{reason}` safe to alert on. Legacy `OnReload(func(*Config))` callbacks preserved for fire-and-forget hooks (admin snapshots, cert reload) but now run *after* every observer has accepted, so a rejected reload does not half-apply to logging/snapshot sinks. Counter is wired through an interface (`RollbackRecorder`) so `internal/config` does not import `internal/metrics`, which keeps the cycle graph clean as more subsystems grow reload needs. |
 
 ---
 

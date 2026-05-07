@@ -182,7 +182,7 @@ func TestComposite_EffectiveState_BulkheadAtCapacity(t *testing.T) {
 	}
 	cb := NewComposite("http://test:8080", cfg, slog.Default(), nil)
 
-	// Inner breaker closed, bulkhead has slack → both states closed.
+	// Inner breaker closed, bulkhead has the slack → both states closed.
 	if got := cb.InnerState(); got != StateClosed {
 		t.Fatalf("InnerState closed, got %v", got)
 	}

@@ -4,20 +4,20 @@ Comprehensive audit of gateway-core identifying 12 performance issues across all
 
 ## Summary
 
-| # | Severity | File(s) | Issue | Fix |
-|---|----------|---------|-------|-----|
-| 1 | HIGH | `proxy.go` | Double backend hit on retry-enabled routes | Buffer + replay |
-| 2 | HIGH | `ratelimit.go` | `fmt.Sprintf` in hot path per request | Struct map key |
-| 3 | HIGH | `ratelimit.go` | `sync.Mutex` serializes all readers | `sync.RWMutex` with read fast path |
-| 4 | MEDIUM | multiple | `json.NewEncoder` per error response | Pre-serialized `[]byte` constants |
-| 5 | MEDIUM | `ratelimit.go` | Double route iteration on rate-limit hit | Single combined scan |
-| 6 | MEDIUM | `proxy.go` | `discardWriter` allocates header map per retry | Replaced with `responseBuffer` |
-| 7 | MEDIUM | `proxy.go`, `ratelimit.go` | Duplicated `pathMatchesPrefix` function | Extracted to `internal/routing` |
-| 8 | LOW | `requestid.go` | `fmt.Sprintf` for UUID generation | `encoding/hex` + byte array |
-| 9 | LOW | `ratelimit.go` | `time.Now()` syscall on every request | Stale-check with 1-minute threshold |
-| 10 | LOW | `config.go` | Package-level `Warnings` var not goroutine-safe | Moved to `Config.Warnings` field |
-| 11 | LOW | `health.go` | Sequential TCP dials on `/ready` | Concurrent goroutines + 5s TTL cache |
-| 12 | LOW | `cors.go` | CORS headers set unconditionally | Conditional on `Origin` header |
+| #  | Severity | File(s)                    | Issue                                           | Fix                                  |
+|----|----------|----------------------------|-------------------------------------------------|--------------------------------------|
+| 1  | HIGH     | `proxy.go`                 | Double backend hit on retry-enabled routes      | Buffer + replay                      |
+| 2  | HIGH     | `ratelimit.go`             | `fmt.Sprintf` in hot path per request           | Struct map key                       |
+| 3  | HIGH     | `ratelimit.go`             | `sync.Mutex` serializes all readers             | `sync.RWMutex` with read fast path   |
+| 4  | MEDIUM   | multiple                   | `json.NewEncoder` per error response            | Pre-serialized `[]byte` constants    |
+| 5  | MEDIUM   | `ratelimit.go`             | Double route iteration on rate-limit hit        | Single combined scan                 |
+| 6  | MEDIUM   | `proxy.go`                 | `discardWriter` allocates header map per retry  | Replaced with `responseBuffer`       |
+| 7  | MEDIUM   | `proxy.go`, `ratelimit.go` | Duplicated `pathMatchesPrefix` function         | Extracted to `internal/routing`      |
+| 8  | LOW      | `requestid.go`             | `fmt.Sprintf` for UUID generation               | `encoding/hex` + byte array          |
+| 9  | LOW      | `ratelimit.go`             | `time.Now()` syscall on every request           | Stale-check with 1-minute threshold  |
+| 10 | LOW      | `config.go`                | Package-level `Warnings` var not goroutine-safe | Moved to `Config.Warnings` field     |
+| 11 | LOW      | `health.go`                | Sequential TCP dials on `/ready`                | Concurrent goroutines + 5s TTL cache |
+| 12 | LOW      | `cors.go`                  | CORS headers set unconditionally                | Conditional on `Origin` header       |
 
 ---
 
@@ -252,7 +252,7 @@ Each `Load()` call sets `cfg.Warnings = collectWarnings(&cfg)` on the new config
 
 **Fix:** Two improvements:
 
-1. **Concurrent dials:** All backends are dialled concurrently using goroutines. Wall-clock time is now max(dial_time) instead of sum(dial_times).
+1. **Concurrent dials:** All backends are dialed concurrently using goroutines. Wall-clock time is now max(dial_time) instead of sum(dial_times).
 
 2. **TTL cache:** Results are cached for 5 seconds. Repeated `/ready` calls within the TTL window return the cached result instantly without any TCP dials.
 
@@ -284,30 +284,30 @@ This is also more correct per the CORS specification, which only requires these 
 ## Files Changed
 
 ### New Files
-| File | Purpose |
-|------|---------|
-| `internal/routing/match.go` | Shared `MatchesPrefix()` extracted from proxy + ratelimit |
-| `internal/routing/match_test.go` | Tests for the shared routing function |
+| File                             | Purpose                                                   |
+|----------------------------------|-----------------------------------------------------------|
+| `internal/routing/match.go`      | Shared `MatchesPrefix()` extracted from proxy + ratelimit |
+| `internal/routing/match_test.go` | Tests for the shared routing function                     |
 
 ### Modified Files
-| File | Fixes Applied |
-|------|---------------|
-| `internal/proxy/proxy.go` | #1 (response buffer), #4 (pre-serialized errors), #6 (removed discardWriter), #7 (uses routing pkg) |
-| `internal/ratelimit/ratelimit.go` | #2 (struct key), #3 (RWMutex), #4 (pre-serialized 429), #5 (single scan), #7 (uses routing pkg), #9 (stale check) |
-| `internal/auth/auth.go` | #4 (pre-serialized 401) |
-| `internal/middleware/requestid.go` | #8 (hex.Encode UUID) |
-| `internal/middleware/cors.go` | #12 (conditional CORS) |
-| `internal/config/config.go` | #10 (Config.Warnings field) |
-| `internal/health/health.go` | #11 (concurrent dials, TTL cache, pre-serialized liveness) |
-| `cmd/gateway/main.go` | #10 (cfg.Warnings) |
+| File                               | Fixes Applied                                                                                                     |
+|------------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| `internal/proxy/proxy.go`          | #1 (response buffer), #4 (pre-serialized errors), #6 (removed discardWriter), #7 (uses routing pkg)               |
+| `internal/ratelimit/ratelimit.go`  | #2 (struct key), #3 (RWMutex), #4 (pre-serialized 429), #5 (single scan), #7 (uses routing pkg), #9 (stale check) |
+| `internal/auth/auth.go`            | #4 (pre-serialized 401)                                                                                           |
+| `internal/middleware/requestid.go` | #8 (hex.Encode UUID)                                                                                              |
+| `internal/middleware/cors.go`      | #12 (conditional CORS)                                                                                            |
+| `internal/config/config.go`        | #10 (Config.Warnings field)                                                                                       |
+| `internal/health/health.go`        | #11 (concurrent dials, TTL cache, pre-serialized liveness)                                                        |
+| `cmd/gateway/main.go`              | #10 (cfg.Warnings)                                                                                                |
 
 ### Test Files Updated
-| File | Change |
-|------|--------|
-| `internal/proxy/proxy_test.go` | Removed `matchesPrefix` tests (moved to routing) |
-| `internal/ratelimit/ratelimit_test.go` | Removed `pathMatchesPrefix` tests (moved to routing) |
-| `internal/config/config_test.go` | `Warnings` to `cfg.Warnings` |
-| `internal/middleware/middleware_test.go` | CORS tests add Origin header; new no-Origin test |
+| File                                     | Change                                               |
+|------------------------------------------|------------------------------------------------------|
+| `internal/proxy/proxy_test.go`           | Removed `matchesPrefix` tests (moved to routing)     |
+| `internal/ratelimit/ratelimit_test.go`   | Removed `pathMatchesPrefix` tests (moved to routing) |
+| `internal/config/config_test.go`         | `Warnings` to `cfg.Warnings`                         |
+| `internal/middleware/middleware_test.go` | CORS tests add Origin header; new no-Origin test     |
 
 ---
 
@@ -317,17 +317,17 @@ Additional performance issues discovered during a full codebase audit after Phas
 
 ## Summary
 
-| # | Issue | File | Severity | Hot Path? | Status |
-|---|-------|------|----------|-----------|--------|
-| P1 | `redactSensitive` O(n·k²) re-lowercasing | `logging.go:151` | Medium | body_logging on | Fixed |
-| P2 | Data race on `currentRoutes` slice | `main.go:117,212` | **High** | Every request | Fixed |
-| P3 | `responseBuffer` alloc per retry attempt | `proxy.go:197` | Low-Med | Retry routes | Fixed |
-| P4 | `Snapshot()` unbounded copy under RLock | `ratelimit.go:260` | Low | Admin only | Fixed |
-| P5 | Body capture allocations per request | `logging.go:135` | Low-Med | body_logging on | Fixed |
-| P6 | `deadlineWriter.claimed` data race | `deadline.go:51` | **High** | global_timeout on | Fixed |
-| P7 | Linear method scan with EqualFold | `proxy.go:256` | Very Low | Every request | Fixed |
-| P8 | Shallow config copy races with hot-reload | `admin.go:150` | Low | Admin only | Verified safe |
-| P9 | 4 prefix checks on every request | `main.go:176` | Very Low | Every request | Fixed |
+| #  | Issue                                     | File               | Severity | Hot Path?         | Status        |
+|----|-------------------------------------------|--------------------|----------|-------------------|---------------|
+| P1 | `redactSensitive` O(n·k²) re-lowercasing  | `logging.go:151`   | Medium   | body_logging on   | Fixed         |
+| P2 | Data race on `currentRoutes` slice        | `main.go:117,212`  | **High** | Every request     | Fixed         |
+| P3 | `responseBuffer` alloc per retry attempt  | `proxy.go:197`     | Low-Med  | Retry routes      | Fixed         |
+| P4 | `Snapshot()` unbounded copy under RLock   | `ratelimit.go:260` | Low      | Admin only        | Fixed         |
+| P5 | Body capture allocations per request      | `logging.go:135`   | Low-Med  | body_logging on   | Fixed         |
+| P6 | `deadlineWriter.claimed` data race        | `deadline.go:51`   | **High** | global_timeout on | Fixed         |
+| P7 | Linear method scan with EqualFold         | `proxy.go:256`     | Very Low | Every request     | Fixed         |
+| P8 | Shallow config copy races with hot-reload | `admin.go:150`     | Low      | Admin only        | Verified safe |
+| P9 | 4 prefix checks on every request          | `main.go:176`      | Very Low | Every request     | Fixed         |
 
 ---
 

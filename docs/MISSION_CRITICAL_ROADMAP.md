@@ -316,12 +316,12 @@ make test-load         # Generate JWT, run k6 baseline
 
 ## Priority Order
 
-| Phase | Focus | Status | Dependencies |
-|-------|-------|--------|-------------|
-| 1 | Security Hardening | **Complete** | None |
-| 2 | Observability & Metrics | **Complete** | `prometheus/client_golang`, `fsnotify/fsnotify` |
-| 3 | Resilience & Reliability | **Complete** | Phase 2 (metrics for circuit breaker) |
-| 4 | Operational Hardening | **Complete** | Phase 1 (TLS needs security headers) |
-| 5 | Testing & CI/CD | **Complete** | Phase 2-3 (integration tests need metrics + circuit breaker) |
+| Phase | Focus                    | Status       | Dependencies                                                 |
+|-------|--------------------------|--------------|--------------------------------------------------------------|
+| 1     | Security Hardening       | **Complete** | None                                                         |
+| 2     | Observability & Metrics  | **Complete** | `prometheus/client_golang`, `fsnotify/fsnotify`              |
+| 3     | Resilience & Reliability | **Complete** | Phase 2 (metrics for circuit breaker)                        |
+| 4     | Operational Hardening    | **Complete** | Phase 1 (TLS needs security headers)                         |
+| 5     | Testing & CI/CD          | **Complete** | Phase 2-3 (integration tests need metrics + circuit breaker) |
 
 Phases 2 and 4 can run in parallel. Phase 3 benefits from Phase 2 metrics. Phase 5 should come last since it tests features from all prior phases.

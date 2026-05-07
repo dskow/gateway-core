@@ -5,7 +5,7 @@
 The following table outlines which versions of core-gateway currently receive security updates. Only actively maintained branches will receive patches for vulnerabilities.
 
 | Version | Supported          |
-| ------- | ------------------ |
+|---------|--------------------|
 | 1.0.x   | :white_check_mark: |
 | < 1.0   | :x:                |
 

@@ -26,10 +26,10 @@ jobs:
       - uses: dominikh/staticcheck-action@v1
         with:
           version: latest
-          # Reuse the Go installed by setup-go above. Otherwise the action
+          # Reuse the Go installed by setup-go above. Otherwise, the action
           # invokes its own setup-go (with `version: stable`), which races
           # the module cache and emits "Cannot open: File exists" tar
-          # warnings before falling back to a cold install.
+          # warnings before falling back to a cold installation.
           install-go: false
           # The action's own cache step pins actions/cache@v4 (Node 20),
           # which is what the runner deprecation annotation is flagging.

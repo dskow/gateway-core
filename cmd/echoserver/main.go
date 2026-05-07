@@ -21,7 +21,9 @@ func main() {
 	flag.Parse()
 
 	if p := os.Getenv("PORT"); p != "" {
-		fmt.Sscanf(p, "%d", port)
+		if _, err := fmt.Sscanf(p, "%d", port); err != nil {
+			log.Printf("invalid PORT env var %q, using default %d: %v", p, *port, err)
+		}
 	}
 	if n := os.Getenv("SERVICE_NAME"); n != "" {
 		*name = n
@@ -38,11 +40,13 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"service":        *name,
 			"requested_code": code,
 			"message":        http.StatusText(code),
-		})
+		}); err != nil {
+			log.Printf("failed to encode status response: %v", err)
+		}
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +62,9 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Printf("failed to encode echo response: %v", err)
+		}
 	})
 
 	addr := fmt.Sprintf(":%d", *port)

@@ -55,7 +55,9 @@ func (rw *RotatingWriter) openFile() error {
 
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		if cerr := f.Close(); cerr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "logging: failed to close log file after stat error: %v\n", cerr)
+		}
 		return fmt.Errorf("stat log file: %w", err)
 	}
 
@@ -93,7 +95,9 @@ func (rw *RotatingWriter) Close() error {
 
 func (rw *RotatingWriter) rotate() error {
 	if rw.file != nil {
-		rw.file.Close()
+		if err := rw.file.Close(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "logging: failed to close log file before rotate: %v\n", err)
+		}
 	}
 
 	// Rename current file to <base>-<timestamp><ext>
@@ -103,7 +107,9 @@ func (rw *RotatingWriter) rotate() error {
 		ext = ".log"
 	}
 	rotatedName := fmt.Sprintf("%s-%s%s", base, time.Now().Format("20060102-150405"), ext)
-	os.Rename(rw.filePath, rotatedName) //nolint:errcheck
+	if err := os.Rename(rw.filePath, rotatedName); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "logging: failed to rename log file %q -> %q: %v\n", rw.filePath, rotatedName, err)
+	}
 
 	// Open a new file
 	if err := rw.openFile(); err != nil {
@@ -146,7 +152,10 @@ func (rw *RotatingWriter) cleanup() {
 
 	// Remove files exceeding max backups (keep the newest maxBackups)
 	for len(rotated) > rw.maxBackups {
-		os.Remove(filepath.Join(dir, rotated[0])) //nolint:errcheck
+		path := filepath.Join(dir, rotated[0])
+		if err := os.Remove(path); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "logging: failed to remove old log %q: %v\n", path, err)
+		}
 		rotated = rotated[1:]
 	}
 
@@ -158,7 +167,9 @@ func (rw *RotatingWriter) cleanup() {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			os.Remove(path) //nolint:errcheck
+			if err := os.Remove(path); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "logging: failed to remove aged log %q: %v\n", path, err)
+			}
 		}
 	}
 }

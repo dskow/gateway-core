@@ -15,7 +15,11 @@ func TestRotatingWriter_CreateFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter: %v", err)
 	}
-	defer rw.Close()
+	defer func() {
+		if err := rw.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
 	n, err := rw.Write([]byte("hello\n"))
 	if err != nil {
@@ -45,12 +49,20 @@ func TestRotatingWriter_RotatesOnSize(t *testing.T) {
 	}
 	// Override maxBytes directly for a small test
 	rw.maxBytes = 100
-	defer rw.Close()
+	defer func() {
+		if err := rw.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
 	// Write enough to trigger rotation
 	data := strings.Repeat("x", 60)
-	rw.Write([]byte(data))
-	rw.Write([]byte(data)) // should trigger rotation
+	if _, err := rw.Write([]byte(data)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := rw.Write([]byte(data)); err != nil { // should trigger rotation
+		t.Fatalf("Write (rotation): %v", err)
+	}
 
 	// Check that a rotated file exists
 	entries, err := os.ReadDir(dir)
@@ -78,12 +90,18 @@ func TestRotatingWriter_MaxBackupsEnforced(t *testing.T) {
 		t.Fatalf("NewRotatingWriter: %v", err)
 	}
 	rw.maxBytes = 50
-	defer rw.Close()
+	defer func() {
+		if err := rw.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
 	// Force multiple rotations
 	data := strings.Repeat("y", 40)
 	for i := 0; i < 5; i++ {
-		rw.Write([]byte(data))
+		if _, err := rw.Write([]byte(data)); err != nil {
+			t.Fatalf("Write iteration %d: %v", i, err)
+		}
 	}
 
 	// Wait briefly for async cleanup
@@ -114,9 +132,15 @@ func TestRotatingWriter_CreatesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter: %v", err)
 	}
-	defer rw.Close()
+	defer func() {
+		if err := rw.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
-	rw.Write([]byte("test"))
+	if _, err := rw.Write([]byte("test")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Error("log file was not created")
