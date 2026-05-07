@@ -1,6 +1,7 @@
 package envelope
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -249,8 +250,8 @@ func mustBoundsViolation(t *testing.T, err error) *BoundsViolation {
 	if err == nil {
 		t.Fatal("expected violation, got nil")
 	}
-	v, ok := err.(*BoundsViolation)
-	if !ok {
+	var v *BoundsViolation
+	if !errors.As(err, &v) {
 		t.Fatalf("expected *BoundsViolation, got %T: %v", err, err)
 	}
 	return v
