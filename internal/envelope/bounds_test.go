@@ -41,7 +41,7 @@ func TestBoundsRegistry_RateLimit_WithinRangeAllowed(t *testing.T) {
 
 	r := NewBoundsRegistry()
 	r.SetRateLimit(IntRange(10, 10000))
-	cases := []any{int(10), int(10000), int64(500), int32(100), 200.0}
+	cases := []any{10, 10000, int64(500), int32(100), 200.0}
 	for _, val := range cases {
 		err := r.Evaluate(Proposal{Kind: KindRateLimit, Agent: "x", Value: val})
 		if err != nil {
