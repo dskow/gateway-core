@@ -50,8 +50,8 @@ func TestConstraintRegistry_ShortCircuitsOnFirstViolation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected violation, got nil")
 	}
-	v, ok := err.(*ConstraintViolation)
-	if !ok {
+	var v *ConstraintViolation
+	if !errors.As(err, &v) {
 		t.Fatalf("expected *ConstraintViolation, got %T", err)
 	}
 	if v.Constraint != "a" || v.Reason != "always_fails" {
@@ -71,8 +71,8 @@ func TestConstraintRegistry_WrapsNonViolationErrors(t *testing.T) {
 	}})
 
 	err := r.Evaluate(Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
-	v, ok := err.(*ConstraintViolation)
-	if !ok {
+	var v *ConstraintViolation
+	if !errors.As(err, &v) {
 		t.Fatalf("expected *ConstraintViolation, got %T", err)
 	}
 	if v.Constraint != "buggy" || v.Reason != "constraint_internal_error" {
@@ -268,8 +268,8 @@ func mustViolation(t *testing.T, err error) *ConstraintViolation {
 	if err == nil {
 		t.Fatal("expected violation, got nil")
 	}
-	v, ok := err.(*ConstraintViolation)
-	if !ok {
+	var v *ConstraintViolation
+	if !errors.As(err, &v) {
 		t.Fatalf("expected *ConstraintViolation, got %T: %v", err, err)
 	}
 	return v
