@@ -146,7 +146,7 @@ func TestDefaultConstraints_RejectsUnknownKind(t *testing.T) {
 	t.Parallel()
 
 	r := DefaultConstraints()
-	err := r.Evaluate(Proposal{Kind: ProposalKind("nonsense"), Agent: "planner", Value: 1})
+	err := r.Evaluate(Proposal{Kind: "nonsense", Agent: "planner", Value: 1})
 	v := mustViolation(t, err)
 	if v.Constraint != "kind.known" || v.Reason != "unknown_kind" {
 		t.Fatalf("unexpected violation: %+v", v)
