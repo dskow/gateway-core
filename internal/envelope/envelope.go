@@ -12,10 +12,11 @@ import (
 var ErrFallback = errors.New("envelope: autonomous-safe fallback; no agent pipeline configured")
 
 // Envelope is the entry point for all agent-produced configuration
-// proposals. Until the full pipeline (constraints, bounds, dampener, shadow
-// simulator) is implemented, the zero-value Envelope and the result of
-// NewAutonomousSafe both reject every proposal. This is intentional and
-// matches the pattern's autonomous-safe default — see docs/AGENTIC_ENVELOPE.md.
+// proposals. The zero-value Envelope and the result of NewAutonomousSafe
+// reject every proposal at the fallback stage; pipeline stages
+// (constraints, bounds, dampener, shadow simulator) only narrow that
+// behavior — wiring up a stage never weakens the autonomous-safe
+// contract. See docs/AGENTIC_ENVELOPE.md.
 //
 // Envelope is safe for concurrent use. Submit must not block on, depend on,
 // or mutate the data path; callers may invoke it from any goroutine.
@@ -24,6 +25,7 @@ type Envelope struct {
 	constraints *ConstraintRegistry
 	bounds      *BoundsRegistry
 	dampener    *DampenerRegistry
+	shadow      *ShadowRegistry
 }
 
 // Option configures an Envelope at construction time. Options are
@@ -59,6 +61,19 @@ func WithDampener(r *DampenerRegistry) Option {
 	return func(e *Envelope) { e.dampener = r }
 }
 
+// WithShadow installs the shadow-simulator stage. Shadow runs after
+// the dampener and is the final pre-fallback stage; a "regression"
+// outcome short-circuits with stage "shadow" and DecisionReject, a
+// "timeout" outcome short-circuits with stage "shadow" and
+// DecisionDefer (with RetryAfter set to the simulator's hard
+// timeout), and a "simulator_internal_error" outcome short-circuits
+// with stage "shadow" and DecisionReject so a buggy simulator never
+// silently green-lights a proposal. A nil registry disables the
+// stage (equivalent to omitting the option).
+func WithShadow(r *ShadowRegistry) Option {
+	return func(e *Envelope) { e.shadow = r }
+}
+
 // New returns an Envelope configured with the given options. With no
 // options it is equivalent to NewAutonomousSafe: every proposal is
 // rejected at the fallback stage.
@@ -88,10 +103,10 @@ func NewAutonomousSafe() *Envelope {
 //  3. bounds (if any)       → DecisionReject, stage "bounds"
 //  4. dampener (if any)     → DecisionDefer (cooldown) or
 //                              DecisionReject (hysteresis), stage "dampener"
-//  5. fallback              → DecisionReject, stage "fallback"
-//
-// Later stages (shadow) will slot in between dampener and fallback as
-// they are built.
+//  5. shadow (if any)       → DecisionDefer (timeout) or
+//                              DecisionReject (regression / internal error),
+//                              stage "shadow"
+//  6. fallback              → DecisionReject, stage "fallback"
 func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 	now := e.timeNow()
 	if err := ctx.Err(); err != nil {
@@ -131,6 +146,21 @@ func (e *Envelope) Submit(ctx context.Context, p Proposal) Decision {
 			return Decision{
 				Kind:       kind,
 				Stage:      "dampener",
+				Reason:     outcome.Error(),
+				RetryAfter: outcome.RetryAfter,
+				DecidedAt:  now,
+			}
+		}
+	}
+	if e != nil && e.shadow != nil {
+		if outcome := e.shadow.Evaluate(ctx, p); outcome != nil {
+			kind := DecisionReject
+			if outcome.Reason == "timeout" {
+				kind = DecisionDefer
+			}
+			return Decision{
+				Kind:       kind,
+				Stage:      "shadow",
 				Reason:     outcome.Error(),
 				RetryAfter: outcome.RetryAfter,
 				DecidedAt:  now,

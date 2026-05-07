@@ -385,3 +385,159 @@ func TestSubmitDampenerRunsAfterContextCheck(t *testing.T) {
 		t.Fatalf("cancelled context must defer at intake; got kind=%s stage=%q", d.Kind, d.Stage)
 	}
 }
+
+func TestSubmitShadowRegressionRejects(t *testing.T) {
+	t.Parallel()
+
+	sim := SimulatorFunc(func(context.Context, Proposal) (*ShadowVerdict, error) {
+		return &ShadowVerdict{
+			SamplesReplayed: 100,
+			Regressions:     []string{"error_rate"},
+		}, nil
+	})
+	sr := NewShadowRegistry(sim, time.Second)
+	sr.Enable(KindRateLimit)
+
+	e := New(WithShadow(sr))
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Target: "/api/users", Agent: "x", Value: 100,
+	})
+	if d.Kind != DecisionReject {
+		t.Fatalf("regression must produce DecisionReject, got %s", d.Kind)
+	}
+	if d.Stage != "shadow" {
+		t.Fatalf("expected stage=shadow, got %q", d.Stage)
+	}
+	if !strings.Contains(d.Reason, "regression") || !strings.Contains(d.Reason, "error_rate") {
+		t.Fatalf("reason must include regression and dimension, got %q", d.Reason)
+	}
+	if d.RetryAfter != 0 {
+		t.Fatalf("regression decision must not set RetryAfter, got %s", d.RetryAfter)
+	}
+}
+
+func TestSubmitShadowTimeoutDefers(t *testing.T) {
+	t.Parallel()
+
+	sim := SimulatorFunc(func(ctx context.Context, _ Proposal) (*ShadowVerdict, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	timeout := 20 * time.Millisecond
+	sr := NewShadowRegistry(sim, timeout)
+	sr.Enable(KindRateLimit)
+
+	e := New(WithShadow(sr))
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Agent: "x", Value: 100,
+	})
+	if d.Kind != DecisionDefer {
+		t.Fatalf("timeout must produce DecisionDefer, got %s", d.Kind)
+	}
+	if d.Stage != "shadow" {
+		t.Fatalf("expected stage=shadow, got %q", d.Stage)
+	}
+	if d.RetryAfter != timeout {
+		t.Fatalf("RetryAfter = %s, want %s", d.RetryAfter, timeout)
+	}
+	if !strings.Contains(d.Reason, "timeout") {
+		t.Fatalf("reason must include timeout, got %q", d.Reason)
+	}
+}
+
+func TestSubmitFallsThroughWhenShadowPasses(t *testing.T) {
+	t.Parallel()
+
+	sim := SimulatorFunc(func(context.Context, Proposal) (*ShadowVerdict, error) {
+		return &ShadowVerdict{SamplesReplayed: 100}, nil
+	})
+	sr := NewShadowRegistry(sim, time.Second)
+	sr.Enable(KindRateLimit)
+
+	e := New(WithShadow(sr))
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Agent: "x", Value: 100,
+	})
+	if d.Kind != DecisionReject {
+		t.Fatalf("expected reject (autonomous-safe fallback), got %s", d.Kind)
+	}
+	if d.Stage != "fallback" {
+		t.Fatalf("a passing shadow verdict must let the proposal reach fallback; got stage=%q", d.Stage)
+	}
+}
+
+func TestSubmitDampenerFailureSkipsShadow(t *testing.T) {
+	t.Parallel()
+
+	dr := NewDampenerRegistry()
+	dr.SetRateLimit(IntDampener{Cooldown: time.Hour})
+	t0 := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	dr.RecordApplied(Proposal{Kind: KindRateLimit, Target: "/api/users", Value: 100}, t0)
+
+	called := false
+	sim := SimulatorFunc(func(context.Context, Proposal) (*ShadowVerdict, error) {
+		called = true
+		return &ShadowVerdict{}, nil
+	})
+	sr := NewShadowRegistry(sim, time.Second)
+	sr.Enable(KindRateLimit)
+
+	e := New(WithDampener(dr), WithShadow(sr))
+	e.now = func() time.Time { return t0.Add(time.Second) }
+
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Target: "/api/users", Agent: "x", Value: 200,
+	})
+	if d.Stage != "dampener" {
+		t.Fatalf("dampener cooldown must short-circuit shadow; got stage=%q", d.Stage)
+	}
+	if called {
+		t.Fatal("simulator must not run when an earlier stage rejects")
+	}
+}
+
+func TestSubmitShadowRunsAfterContextCheck(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	sim := SimulatorFunc(func(context.Context, Proposal) (*ShadowVerdict, error) {
+		called = true
+		return &ShadowVerdict{}, nil
+	})
+	sr := NewShadowRegistry(sim, time.Second)
+	sr.Enable(KindRateLimit)
+
+	e := New(WithShadow(sr))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	d := e.Submit(ctx, Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
+	if d.Kind != DecisionDefer || d.Stage != "intake" {
+		t.Fatalf("cancelled context must defer at intake; got kind=%s stage=%q", d.Kind, d.Stage)
+	}
+	if called {
+		t.Fatal("simulator must not run when the context is already cancelled at intake")
+	}
+}
+
+func TestSubmitShadowDisabledKindFallsThrough(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	sim := SimulatorFunc(func(context.Context, Proposal) (*ShadowVerdict, error) {
+		called = true
+		return &ShadowVerdict{Regressions: []string{"latency"}}, nil
+	})
+	sr := NewShadowRegistry(sim, time.Second)
+	// Only KindRouteWeight is enabled — a KindRateLimit proposal must skip shadow.
+	sr.Enable(KindRouteWeight)
+
+	e := New(WithShadow(sr))
+	d := e.Submit(context.Background(), Proposal{Kind: KindRateLimit, Agent: "x", Value: 100})
+	if d.Stage != "fallback" {
+		t.Fatalf("disabled kind must reach fallback; got stage=%q reason=%q", d.Stage, d.Reason)
+	}
+	if called {
+		t.Fatal("simulator must not run for a kind that is not enabled")
+	}
+}
