@@ -38,3 +38,4 @@ tests/load/results/*.json
 # Integration test temp files
 .env.integration
 .idea/
+bin/

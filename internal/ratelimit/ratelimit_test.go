@@ -86,7 +86,7 @@ func TestLimiter_PerClientIsolation(t *testing.T) {
 
 	handler := limiter.Middleware()(okHandler())
 
-	// Client 1 uses up its burst
+	// Client 1 client uses up its burst
 	req1 := httptest.NewRequest("GET", "/test", nil)
 	req1.RemoteAddr = "10.0.0.1:12345"
 	rec1 := httptest.NewRecorder()

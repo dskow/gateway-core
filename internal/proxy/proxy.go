@@ -196,8 +196,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(route.FallbackStatus)
 				if route.FallbackBody != "" {
-					w.Write([]byte(route.FallbackBody))
-					w.Write([]byte("\n"))
+					if _, err := w.Write([]byte(route.FallbackBody)); err != nil {
+						rt.logger.Debug("proxy: failed to write fallback body", "backend", route.Backend, "error", err)
+					}
+					if _, err := w.Write([]byte("\n")); err != nil {
+						rt.logger.Debug("proxy: failed to write fallback newline", "backend", route.Backend, "error", err)
+					}
 				}
 			} else {
 				apierror.WriteJSON(w, r, http.StatusServiceUnavailable, apierror.CircuitOpen, "circuit breaker open")
@@ -278,7 +282,9 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				breaker.RecordSuccess(latency)
 			}
 			w.Header().Set("X-Gateway-Latency", time.Since(start).String())
-			buf.replayTo(recorder)
+			if err := buf.replayTo(recorder); err != nil {
+				rt.logger.Debug("proxy: failed to replay response body", "backend", route.Backend, "error", err)
+			}
 			responseBufferPool.Put(buf)
 			break
 		}
@@ -426,12 +432,15 @@ func (b *responseBuffer) Write(p []byte) (int, error) {
 
 // replayTo copies the buffered response (headers, status, body) to a real
 // ResponseWriter. The recorder captures the status code for metrics.
-func (b *responseBuffer) replayTo(rr *responseRecorder) {
+// Returns any error from writing the body to the underlying connection;
+// callers may log it but cannot recover (status has already been sent).
+func (b *responseBuffer) replayTo(rr *responseRecorder) error {
 	for k, vals := range b.header {
 		for _, v := range vals {
 			rr.Header().Add(k, v)
 		}
 	}
 	rr.WriteHeader(b.statusCode)
-	rr.Write(b.body.Bytes())
+	_, err := rr.Write(b.body.Bytes())
+	return err
 }

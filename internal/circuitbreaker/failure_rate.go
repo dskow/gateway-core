@@ -88,6 +88,8 @@ func (b *FailureRateBreaker) RecordSuccess(_ time.Duration) {
 		if b.halfOpenSuccess >= b.halfOpenMax {
 			b.transitionTo(StateClosed)
 		}
+	default:
+		// StateOpen: outcome arrived after Allow() denied; ignore.
 	}
 }
 
@@ -103,6 +105,8 @@ func (b *FailureRateBreaker) RecordFailure(_ time.Duration) {
 		}
 	case StateHalfOpen:
 		b.transitionTo(StateOpen)
+	default:
+		// StateOpen: already open; nothing to record.
 	}
 }
 
@@ -175,6 +179,7 @@ func (b *FailureRateBreaker) transitionTo(newState State) {
 	)
 
 	switch newState {
+	//goland:noinspection GoBoolExpressions,GoDfaConstantCondition
 	case StateClosed:
 		// Reset window and half-open counters.
 		b.head = 0

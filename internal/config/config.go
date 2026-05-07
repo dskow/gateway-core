@@ -32,7 +32,7 @@ type Config struct {
 }
 
 // MetricsConfig holds Prometheus metrics endpoint settings.
-// Enabled defaults to true; set to false to disable metrics.
+// Enabled defaults to true; set to a value of false to disable metrics.
 type MetricsConfig struct {
 	Enabled *bool  `yaml:"enabled" json:"enabled"`
 	Path    string `yaml:"path" json:"path"`
@@ -163,7 +163,7 @@ func (r RouteConfig) Timeout() time.Duration {
 	return time.Duration(r.TimeoutMs) * time.Millisecond
 }
 
-var envVarRe = regexp.MustCompile(`\$\{([^}]+)\}`)
+var envVarRe = regexp.MustCompile(`\$\{([^}]+)}`)
 
 // expandEnvVars replaces ${VAR_NAME} patterns in s with the corresponding
 // environment variable value.

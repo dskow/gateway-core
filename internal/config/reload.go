@@ -9,7 +9,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// ConfigObserver is the DP-001 reload contract: given the old and new
+// Observer is the DP-001 reload contract: given the old and new
 // configs, apply the change and return an error if the change cannot be
 // accepted. A non-nil return (or a panic) forces the Reloader to roll
 // back r.current to old, logged and counted as a rollback.
@@ -20,15 +20,15 @@ import (
 // earlier observers' side effects, every observer must also be idempotent
 // so a subsequent successful reload can bring the component back in line.
 // See docs/DESIGN_PATTERNS_PLAN.md §7 Risk Register for rationale.
-type ConfigObserver interface {
+type Observer interface {
 	OnReload(old, new *Config) error
 }
 
-// ConfigObserverFunc adapts an ordinary function to the ConfigObserver
+// ObserverFunc adapts an ordinary function to the Observer
 // interface — useful for Gateway wiring and tests.
-type ConfigObserverFunc func(old, new *Config) error
+type ObserverFunc func(old, new *Config) error
 
-func (f ConfigObserverFunc) OnReload(old, new *Config) error { return f(old, new) }
+func (f ObserverFunc) OnReload(old, new *Config) error { return f(old, new) }
 
 // RollbackRecorder is the subset of *metrics.Metrics used by Reloader.
 // Defined here as an interface so the config package does not import the
@@ -48,7 +48,7 @@ type Reloader struct {
 	// legacyCallbacks preserves the pre-DP-001 fire-and-forget hooks that
 	// cannot fail; they are invoked after all observers have accepted.
 	legacyCallbacks []func(*Config)
-	observers       []ConfigObserver
+	observers       []Observer
 	rollbacks       RollbackRecorder
 	watcher         *fsnotify.Watcher
 	stopCh          chan struct{}
@@ -90,7 +90,7 @@ func (r *Reloader) SetPath(path string) {
 
 // OnReload registers a legacy callback that is invoked with the new
 // config after every observer has accepted. Preserved for callers that
-// cannot fail the reload; new code should implement ConfigObserver
+// cannot fail the reload; new code should implement Observer
 // directly via RegisterObserver.
 func (r *Reloader) OnReload(fn func(*Config)) {
 	r.mu.Lock()
@@ -101,7 +101,7 @@ func (r *Reloader) OnReload(fn func(*Config)) {
 // RegisterObserver adds an observer to the rollback-capable reload
 // pipeline. Observers run in registration order; the first one to
 // return a non-nil error (or panic) triggers a rollback.
-func (r *Reloader) RegisterObserver(obs ConfigObserver) {
+func (r *Reloader) RegisterObserver(obs Observer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.observers = append(r.observers, obs)
@@ -120,7 +120,9 @@ func (r *Reloader) Start() {
 
 	if err := watcher.Add(r.path); err != nil {
 		r.logger.Error("failed to watch config file", "path", r.path, "error", err)
-		watcher.Close()
+		if cerr := watcher.Close(); cerr != nil {
+			r.logger.Warn("failed to close file watcher after add error", "error", cerr)
+		}
 		r.watcher = nil
 		return
 	}
@@ -137,7 +139,9 @@ func (r *Reloader) Start() {
 func (r *Reloader) Stop() {
 	close(r.stopCh)
 	if r.watcher != nil {
-		r.watcher.Close()
+		if err := r.watcher.Close(); err != nil {
+			r.logger.Warn("failed to close file watcher", "error", err)
+		}
 	}
 }
 
@@ -160,7 +164,7 @@ func (r *Reloader) Reload() bool {
 	r.mu.Lock()
 	old := r.current
 	r.current = newCfg
-	observers := make([]ConfigObserver, len(r.observers))
+	observers := make([]Observer, len(r.observers))
 	copy(observers, r.observers)
 	legacy := make([]func(*Config), len(r.legacyCallbacks))
 	copy(legacy, r.legacyCallbacks)
@@ -195,7 +199,7 @@ func (r *Reloader) Reload() bool {
 // invokeObserver calls obs.OnReload with panic recovery. Returns a stable
 // low-cardinality reason label (for Prometheus), a free-form detail string
 // (for logs), and false when the observer rejected the reload.
-func invokeObserver(obs ConfigObserver, old, newCfg *Config) (reason, detail string, ok bool) {
+func invokeObserver(obs Observer, old, newCfg *Config) (reason, detail string, ok bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			reason = "observer_panic"

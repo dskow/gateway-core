@@ -297,7 +297,7 @@ func TestReloader_ObserverErrorRollsBack(t *testing.T) {
 		sawOld *Config
 		sawNew *Config
 	}
-	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+	r.RegisterObserver(ObserverFunc(func(old, new *Config) error {
 		observed.sawOld = old
 		observed.sawNew = new
 		return errors.New("observer refuses this reload")
@@ -342,7 +342,7 @@ func TestReloader_ObserverPanicRollsBack(t *testing.T) {
 	rec := &countingRecorder{}
 	r.SetRollbackRecorder(rec)
 
-	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+	r.RegisterObserver(ObserverFunc(func(old, new *Config) error {
 		panic("observer went boom")
 	}))
 
@@ -376,15 +376,15 @@ func TestReloader_ObserverOrderAndPartialApply(t *testing.T) {
 	r.SetRollbackRecorder(&countingRecorder{})
 
 	var order []string
-	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+	r.RegisterObserver(ObserverFunc(func(old, new *Config) error {
 		order = append(order, "a")
 		return nil
 	}))
-	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+	r.RegisterObserver(ObserverFunc(func(old, new *Config) error {
 		order = append(order, "b")
 		return errors.New("reject at b")
 	}))
-	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+	r.RegisterObserver(ObserverFunc(func(old, new *Config) error {
 		order = append(order, "c")
 		return nil
 	}))
@@ -418,7 +418,7 @@ func TestReloader_LegacyCallbacksSkippedOnRollback(t *testing.T) {
 
 	var legacyCalls int
 	r.OnReload(func(*Config) { legacyCalls++ })
-	r.RegisterObserver(ConfigObserverFunc(func(old, new *Config) error {
+	r.RegisterObserver(ObserverFunc(func(old, new *Config) error {
 		return errors.New("no")
 	}))
 

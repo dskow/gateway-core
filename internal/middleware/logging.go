@@ -15,7 +15,7 @@ import (
 
 // LogLevelNone is a sentinel value indicating no log entry should be emitted.
 // It is higher than any slog.Level so logger.Enabled() will always return false.
-const LogLevelNone slog.Level = slog.LevelError + 100
+const LogLevelNone = slog.LevelError + 100
 
 // ParseLogLevel converts a route log_level string to a slog.Level.
 // Returns slog.LevelInfo for empty string (default).

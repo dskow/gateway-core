@@ -352,11 +352,11 @@ func (l *Limiter) Snapshot() []LimiterEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	cap := len(l.clients)
-	if cap > maxSnapshotEntries {
-		cap = maxSnapshotEntries
+	capacity := len(l.clients)
+	if capacity > maxSnapshotEntries {
+		capacity = maxSnapshotEntries
 	}
-	entries := make([]LimiterEntry, 0, cap)
+	entries := make([]LimiterEntry, 0, capacity)
 	for key, c := range l.clients {
 		entries = append(entries, LimiterEntry{
 			IP:       key.ip,

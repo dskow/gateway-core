@@ -217,7 +217,7 @@ func NewGateway(ctx context.Context, cfg *config.Config, logger *slog.Logger, op
 		handler.ServeHTTP(w, r)
 	})
 
-	// DP-001: the Gateway itself implements ConfigObserver so hot reloads
+	// DP-001: the Gateway itself implements config.Observer so hot reloads
 	// go through the rollback-capable pipeline. OnReload is idempotent —
 	// it overwrites limiter rates, breaker thresholds, and the routes atom
 	// unconditionally — which is the contract the Reloader documents.
@@ -262,11 +262,11 @@ func (g *Gateway) SetReloadPath(path string) {
 // exercise requests in-process without binding a TCP listener.
 func (g *Gateway) Handler() http.Handler { return g.handler }
 
-// OnReload implements config.ConfigObserver. It is idempotent: every field
+// OnReload implements config.Observer. It is idempotent: every field
 // is rewritten from `newCfg` regardless of the current state, so a rollback
 // (which only restores the Reloader's current pointer) followed by a later
 // successful reload will always bring subsystems in line with the config.
-func (g *Gateway) OnReload(old, newCfg *config.Config) error {
+func (g *Gateway) OnReload(_, newCfg *config.Config) error {
 	g.Limiter.UpdateConfig(newCfg.RateLimit, newCfg.Routes)
 	newCbCfg := circuitbreaker.Config{
 		WindowSize:       newCfg.CircuitBreaker.WindowSize,
@@ -288,8 +288,8 @@ func (g *Gateway) OnReload(old, newCfg *config.Config) error {
 }
 
 // Run starts the watcher, binds the HTTP server, and blocks until ctx is
-// cancelled or the server returns a fatal error. Graceful shutdown happens
-// automatically when ctx is cancelled, bounded by cfg.Server.ShutdownTimeout.
+// canceled or the server returns a fatal error. Graceful shutdown happens
+// automatically when ctx is canceled, bounded by cfg.Server.ShutdownTimeout.
 func (g *Gateway) Run(ctx context.Context) error {
 	g.Reloader.Start()
 	defer g.Reloader.Stop()

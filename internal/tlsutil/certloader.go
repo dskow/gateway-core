@@ -46,11 +46,15 @@ func New(certFile, keyFile string, logger *slog.Logger) (*CertLoader, error) {
 	}
 
 	if err := watcher.Add(certFile); err != nil {
-		watcher.Close()
+		if cerr := watcher.Close(); cerr != nil {
+			logger.Warn("failed to close cert file watcher after add error", "error", cerr)
+		}
 		return nil, fmt.Errorf("watching cert file: %w", err)
 	}
 	if err := watcher.Add(keyFile); err != nil {
-		watcher.Close()
+		if cerr := watcher.Close(); cerr != nil {
+			logger.Warn("failed to close cert file watcher after add error", "error", cerr)
+		}
 		return nil, fmt.Errorf("watching key file: %w", err)
 	}
 
@@ -65,7 +69,7 @@ func New(certFile, keyFile string, logger *slog.Logger) (*CertLoader, error) {
 
 // GetCertificate returns the current certificate. This is the callback for
 // tls.Config.GetCertificate — it is called on every TLS handshake.
-func (cl *CertLoader) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (cl *CertLoader) GetCertificate(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	cl.mu.RLock()
 	defer cl.mu.RUnlock()
 	return cl.cert, nil
@@ -86,7 +90,9 @@ func (cl *CertLoader) Reload() error {
 func (cl *CertLoader) Stop() {
 	close(cl.stopCh)
 	if cl.watcher != nil {
-		cl.watcher.Close()
+		if err := cl.watcher.Close(); err != nil {
+			cl.logger.Warn("failed to close cert file watcher", "error", err)
+		}
 	}
 }
 
@@ -115,7 +121,7 @@ func (cl *CertLoader) watchLoop() {
 					debounce.Stop()
 				}
 				debounce = time.AfterFunc(300*time.Millisecond, func() {
-					cl.Reload() //nolint:errcheck
+					_ = cl.Reload() // Reload logs its own error
 				})
 			}
 		case err, ok := <-cl.watcher.Errors:

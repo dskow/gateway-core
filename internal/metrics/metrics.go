@@ -31,7 +31,7 @@ type Metrics struct {
 	BulkheadInFlight           *prometheus.GaugeVec
 	RateLimitClientsTracked    prometheus.Gauge
 	RateLimitClientsEvicted    prometheus.Counter
-	// ConfigReloadRollbacks counts rollbacks triggered when a ConfigObserver
+	// ConfigReloadRollbacks counts rollbacks triggered when a config.Observer
 	// returned an error or panicked during a reload (DP-001).
 	ConfigReloadRollbacks *prometheus.CounterVec
 }
@@ -164,14 +164,6 @@ func New(reg prometheus.Registerer) *Metrics {
 // Pass prometheus.DefaultGatherer to match the pre-DP-002 behavior.
 func Handler(g prometheus.Gatherer) http.Handler {
 	return promhttp.HandlerFor(g, promhttp.HandlerOpts{})
-}
-
-// NewForTest builds a *Metrics registered on a fresh, isolated
-// prometheus.Registry. Intended only for tests — lets each case exercise
-// the same collectors the production binary uses without double-registering
-// on the default registry.
-func NewForTest() *Metrics {
-	return New(prometheus.NewRegistry())
 }
 
 // IncRollback records a single config reload rollback with the given

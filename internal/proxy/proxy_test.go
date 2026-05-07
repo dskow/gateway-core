@@ -14,7 +14,7 @@ func echoHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"path":    r.URL.Path,
 			"method":  r.Method,
 			"headers": flatHeaders(r.Header),
@@ -356,6 +356,9 @@ func TestRouter_DistinctProxiesForDistinctBackends(t *testing.T) {
 // Backends on the same host:port but different paths must still get
 // distinct proxies — the Director prepends the target path to each request.
 func TestRouter_DistinctProxiesForSameHostDifferentPath(t *testing.T) {
+	// api.example.com is IANA-reserved for documentation; this test never
+	// dials these backends, it only asserts proxy keying.
+	//noinspection HttpUrlsUsage
 	routes := []config.RouteConfig{
 		{PathPrefix: "/v1", Backend: "http://api.example.com:8080/v1", TimeoutMs: 5000},
 		{PathPrefix: "/v2", Backend: "http://api.example.com:8080/v2", TimeoutMs: 5000},

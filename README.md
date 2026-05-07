@@ -104,43 +104,43 @@ make lint
 
 ### Server
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `server.port` | int | `8080` | Listen port |
-| `server.read_timeout` | duration | `15s` | HTTP read timeout |
-| `server.write_timeout` | duration | `15s` | HTTP write timeout |
-| `server.shutdown_timeout` | duration | `10s` | Graceful shutdown timeout |
+| Field                     | Type     | Default | Description               |
+|---------------------------|----------|---------|---------------------------|
+| `server.port`             | int      | `8080`  | Listen port               |
+| `server.read_timeout`     | duration | `15s`   | HTTP read timeout         |
+| `server.write_timeout`    | duration | `15s`   | HTTP write timeout        |
+| `server.shutdown_timeout` | duration | `10s`   | Graceful shutdown timeout |
 
 ### Rate Limiting
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `rate_limit.requests_per_second` | float | `100` | Global requests per second per client |
-| `rate_limit.burst_size` | int | `50` | Maximum burst size per client |
+| Field                            | Type  | Default | Description                           |
+|----------------------------------|-------|---------|---------------------------------------|
+| `rate_limit.requests_per_second` | float | `100`   | Global requests per second per client |
+| `rate_limit.burst_size`          | int   | `50`    | Maximum burst size per client         |
 
 ### Authentication
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `auth.enabled` | bool | `false` | Enable JWT validation |
-| `auth.jwt_secret` | string | — | HMAC-SHA256 signing secret (supports `${ENV_VAR}`) |
-| `auth.issuer` | string | — | Expected JWT issuer |
-| `auth.audience` | string | — | Expected JWT audience |
-| `auth.scopes` | []string | `[]` | Required OAuth2 scopes |
+| Field             | Type     | Default | Description                                        |
+|-------------------|----------|---------|----------------------------------------------------|
+| `auth.enabled`    | bool     | `false` | Enable JWT validation                              |
+| `auth.jwt_secret` | string   | —       | HMAC-SHA256 signing secret (supports `${ENV_VAR}`) |
+| `auth.issuer`     | string   | —       | Expected JWT issuer                                |
+| `auth.audience`   | string   | —       | Expected JWT audience                              |
+| `auth.scopes`     | []string | `[]`    | Required OAuth2 scopes                             |
 
 ### Routes
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `routes[].path_prefix` | string | — | URL path prefix to match (required) |
-| `routes[].backend` | string | — | Backend service URL (required) |
-| `routes[].strip_prefix` | bool | `false` | Strip the path prefix before forwarding |
-| `routes[].methods` | []string | all | Allowed HTTP methods |
-| `routes[].auth_required` | bool | `false` | Require JWT authentication |
-| `routes[].timeout_ms` | int | `30000` | Request timeout in milliseconds |
-| `routes[].retry_attempts` | int | `0` | Retry attempts on 502/503/504 |
-| `routes[].headers` | map | — | Custom headers to inject |
-| `routes[].rate_override` | object | — | Per-route rate limit override |
+| Field                     | Type     | Default | Description                             |
+|---------------------------|----------|---------|-----------------------------------------|
+| `routes[].path_prefix`    | string   | —       | URL path prefix to match (required)     |
+| `routes[].backend`        | string   | —       | Backend service URL (required)          |
+| `routes[].strip_prefix`   | bool     | `false` | Strip the path prefix before forwarding |
+| `routes[].methods`        | []string | all     | Allowed HTTP methods                    |
+| `routes[].auth_required`  | bool     | `false` | Require JWT authentication              |
+| `routes[].timeout_ms`     | int      | `30000` | Request timeout in milliseconds         |
+| `routes[].retry_attempts` | int      | `0`     | Retry attempts on 502/503/504           |
+| `routes[].headers`        | map      | —       | Custom headers to inject                |
+| `routes[].rate_override`  | object   | —       | Per-route rate limit override           |
 
 ## Example curl Commands
 
@@ -189,12 +189,12 @@ Makefile                      — build, test, lint, run, docker targets
 
 ## Dependencies
 
-| Package | Purpose |
-|---------|---------|
-| `github.com/golang-jwt/jwt/v5` | JWT parsing and validation |
-| `golang.org/x/time` | Token bucket rate limiter |
-| `gopkg.in/yaml.v3` | YAML configuration parsing |
-| Go stdlib | Everything else (HTTP, logging, crypto, etc.) |
+| Package                        | Purpose                                       |
+|--------------------------------|-----------------------------------------------|
+| `github.com/golang-jwt/jwt/v5` | JWT parsing and validation                    |
+| `golang.org/x/time`            | Token bucket rate limiter                     |
+| `gopkg.in/yaml.v3`             | YAML configuration parsing                    |
+| Go stdlib                      | Everything else (HTTP, logging, crypto, etc.) |
 
 ## Why This Project
 

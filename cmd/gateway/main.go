@@ -29,7 +29,11 @@ func main() {
 
 	logWriter, logCloser := buildLogWriter(cfg.Logging)
 	if logCloser != nil {
-		defer logCloser.Close()
+		defer func() {
+			if err := logCloser.Close(); err != nil {
+				slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("failed to close log writer", "error", err)
+			}
+		}()
 	}
 	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

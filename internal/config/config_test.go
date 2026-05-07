@@ -102,8 +102,16 @@ routes:
 }
 
 func TestLoadFromBytes_EnvVarSubstitution(t *testing.T) {
-	os.Setenv("TEST_JWT_SECRET", "env-secret-value")
-	defer os.Unsetenv("TEST_JWT_SECRET")
+	err := os.Setenv("TEST_JWT_SECRET", "env-secret-value")
+	if err != nil {
+		return
+	}
+	defer func() {
+		err := os.Unsetenv("TEST_JWT_SECRET")
+		if err != nil {
+
+		}
+	}()
 
 	yaml := []byte(`
 auth:
@@ -125,7 +133,10 @@ routes:
 }
 
 func TestLoadFromBytes_UnresolvedEnvVarWarning(t *testing.T) {
-	os.Unsetenv("NONEXISTENT_SECRET")
+	err := os.Unsetenv("NONEXISTENT_SECRET")
+	if err != nil {
+		return
+	}
 
 	yaml := []byte(`
 auth:

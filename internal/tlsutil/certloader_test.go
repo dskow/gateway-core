@@ -83,8 +83,12 @@ func TestCertLoader_InvalidCert(t *testing.T) {
 	certFile := filepath.Join(dir, "cert.pem")
 	keyFile := filepath.Join(dir, "key.pem")
 
-	os.WriteFile(certFile, []byte("invalid"), 0o644)
-	os.WriteFile(keyFile, []byte("invalid"), 0o644)
+	if err := os.WriteFile(certFile, []byte("invalid"), 0o644); err != nil {
+		t.Fatalf("WriteFile cert: %v", err)
+	}
+	if err := os.WriteFile(keyFile, []byte("invalid"), 0o644); err != nil {
+		t.Fatalf("WriteFile key: %v", err)
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
