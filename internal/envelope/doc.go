@@ -36,6 +36,18 @@
 //     a proposal. The package ships a NoopSimulator and a DefaultSLOScorer
 //     so the stage has a usable autonomous-safe default before a real
 //     replay engine exists.
+//   - The multi-agent pipeline: a linear, ordered Pipeline of one Planner
+//     followed by zero or more Reviewers (Verifier, Safety, Observer in
+//     non-decreasing Role order). The Planner is the only producer of
+//     proposals; each Reviewer can veto with a structured reason, and
+//     the first vetoing reviewer short-circuits the rest. The Pipeline
+//     enforces an ErrorBudget that auto-disables the producer side after
+//     a streak of agent failures, and exposes Disable / Enable for
+//     operator override (with Enabled reporting whether the next Run
+//     would actually run agents). The Pipeline is the *only* path into
+//     the Envelope from agents, but the Envelope itself runs identically
+//     whether a Pipeline is wired up or not — proposals from any source
+//     enter through Envelope.Submit.
 //
 // The package's contract is therefore:
 //
@@ -66,6 +78,11 @@
 //     path is unaffected: simulators are read-only, and a missing or
 //     not-yet-built simulator (NoopSimulator) is the autonomous-safe
 //     default for the stage.
+//   - A Pipeline produces proposals that the caller submits to the
+//     Envelope; the Envelope makes no assumptions about the Pipeline
+//     and runs identically whether one is configured or not. A nil
+//     Pipeline (no agents at all) is the autonomous-safe default
+//     and is what the gateway runs in until a sidecar is wired up.
 //   - No exported function in this package may block on, depend on, or
 //     mutate the data path.
 package envelope
