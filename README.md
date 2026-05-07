@@ -6,22 +6,22 @@ A lightweight, config-driven API gateway written in Go that provides JWT/OAuth2 
 
 ```mermaid
 graph TD
-    Client[Client] --> GW[API Gateway :8080]
+    Client[Client] --> GW["API Gateway :8080"]
 
-    subgraph Gateway Middleware Stack
+    subgraph Gateway_Middleware_Stack
         GW --> Recovery[Recovery]
-        Recovery --> Logging[Structured Logging]
+        Recovery --> Logging["Structured Logging"]
         Logging --> CORS[CORS]
-        CORS --> RateLimit[Rate Limiter]
-        RateLimit --> Auth[JWT Auth]
-        Auth --> Proxy[Reverse Proxy Router]
+        CORS --> RateLimit["Rate Limiter"]
+        RateLimit --> Auth["JWT Auth"]
+        Auth --> Proxy["Reverse Proxy Router"]
     end
 
-    Proxy -->|/api/users/*| US[Users Service :3001]
-    Proxy -->|/api/analytics/*| AS[Analytics Service :3002]
-    Proxy -->|/webhooks/*| WH[Webhook Handler :3003]
+    Proxy -->|/api/users/*| US["Users Service :3001"]
+    Proxy -->|/api/analytics/*| AS["Analytics Service :3002"]
+    Proxy -->|/webhooks/*| WH["Webhook Handler :3003"]
 
-    GW --> Health[/health /ready]
+    GW --> Health["/health /ready"]
 ```
 
 ## Features
