@@ -5,7 +5,7 @@ control planes — first applied here to an API gateway.
 
 > **Author:** David Skowronski
 > **First publication:** 2026-05-07 (this repository)
-> **Status:** Pattern documentation. Partially implemented in `internal/envelope/` (autonomous-safe default). Full pipeline scheduled for the agentic phase of the [2030 plan](API_GATEWAY_MAIN_PLAN_2030.md).
+> **Status:** Pattern documentation. Partially implemented in `internal/envelope/` (autonomous-safe default; constraints, bounds, and dampener stages built). Full pipeline scheduled for the agentic phase of the [2030 plan](API_GATEWAY_MAIN_PLAN_2030.md).
 
 This document is the canonical, citable description of the pattern. Other
 documents in this repository ([`ARCHITECTURE.md`](ARCHITECTURE.md),
@@ -214,23 +214,27 @@ prompt is not immutable.
 | `internal/envelope/` package skeleton | **Built** — `Envelope` type, `Proposal` and `Decision` types, no-op `ShadowRunner`, default policy that rejects all proposals (the autonomous-safe default). | `internal/envelope/` |
 | Immutable constraint registry | **Built** — `Constraint` interface, `ConstraintRegistry`, `DefaultConstraints()` (well-formedness baseline), wired as the first pipeline stage via `WithConstraints`. Violations short-circuit at stage `"constraints"` with a structured `*ConstraintViolation`; passing proposals fall through to fallback until later stages exist. | `internal/envelope/constraints.go` |
 | Bounded delta enforcement | **Built (value-range)** — per-Kind absolute bounds (`IntBound`, `FloatBound`, `DurationBound`) registered in `BoundsRegistry`, wired as the second pipeline stage via `WithBounds`. Out-of-range proposals short-circuit at stage `"bounds"` with a structured `*BoundsViolation`. Magnitude bounds (e.g., ±20% from current value) and per-window rate bounds remain designed but not built. | `internal/envelope/bounds.go` |
-| Dampener (hysteresis + cooldown) | **Designed**, not built. | — |
+| Dampener (hysteresis + cooldown) | **Built (symmetric)** — per-`(Kind, Target)` state in `DampenerRegistry`, wired as the third pipeline stage via `WithDampener`. Cooldown short-circuits with stage `"dampener"`, `DecisionDefer`, and a precise `RetryAfter`; symmetric minimum-step hysteresis (`|new - last applied| >= H`) short-circuits with stage `"dampener"` and `DecisionReject`. Asymmetric, direction-aware hysteresis remains designed but not built. State is updated via `RecordApplied`, called by the Envelope after `DecisionApply`; until the apply path exists in the deterministic core, the dampener is a pass-through for proposals submitted through `Submit`. | `internal/envelope/dampener.go` |
 | Shadow simulator (traffic replay) | **Designed**, not built. | — |
 | Multi-agent pipeline (Planner / Verifier / Safety / Observer) | **Designed**, not built. | — |
 
 The package is intentionally an autonomous-safe default: until the
 remaining stages are implemented, every proposal that does not violate a
-constraint or bound still falls through to a fallback rejection. This
-matches the pattern's central claim — the deterministic core works
-without agents, and agents are added incrementally without ever putting
-the data path at risk. The constraints stage gives clearer rejection
-reasons for malformed or unconstitutional proposals (e.g., a non-positive
-rate-limit value is rejected at stage `constraints` with reason
-`rate_limit.positive: non_positive_value`); the bounds stage rejects
-proposals that exceed operator-authored value-range limits at stage
-`bounds` with a reason like `bounds(rate_limit): above_maximum`. Neither
-stage weakens the autonomous-safe contract, because nothing in the
-deterministic core ever observes the rejection.
+constraint, a bound, or the dampener still falls through to a fallback
+rejection. This matches the pattern's central claim — the deterministic
+core works without agents, and agents are added incrementally without
+ever putting the data path at risk. The constraints stage gives clearer
+rejection reasons for malformed or unconstitutional proposals (e.g., a
+non-positive rate-limit value is rejected at stage `constraints` with
+reason `rate_limit.positive: non_positive_value`); the bounds stage
+rejects proposals that exceed operator-authored value-range limits at
+stage `bounds` with a reason like `bounds(rate_limit): above_maximum`;
+the dampener stage defers proposals that arrive inside a cooldown window
+(`dampener(rate_limit): cooldown_active`) and rejects proposals whose
+value differs from the last applied value by less than the configured
+hysteresis band (`dampener(rate_limit): below_hysteresis`). None of the
+three stages weakens the autonomous-safe contract, because nothing in
+the deterministic core ever observes the rejection.
 
 ## 10. Related Work
 

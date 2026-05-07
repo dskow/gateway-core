@@ -258,3 +258,130 @@ func TestSubmitBoundsRunAfterContextCheck(t *testing.T) {
 		t.Fatalf("cancelled context must defer at intake; got kind=%s stage=%q", d.Kind, d.Stage)
 	}
 }
+
+func TestSubmitDampenerCooldownDefers(t *testing.T) {
+	t.Parallel()
+
+	dr := NewDampenerRegistry()
+	dr.SetRateLimit(IntDampener{Cooldown: 10 * time.Second})
+
+	t0 := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	dr.RecordApplied(Proposal{Kind: KindRateLimit, Target: "/api/users", Value: 100}, t0)
+
+	e := New(WithDampener(dr))
+	e.now = func() time.Time { return t0.Add(3 * time.Second) }
+
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Target: "/api/users", Agent: "x", Value: 200,
+	})
+	if d.Kind != DecisionDefer {
+		t.Fatalf("cooldown must produce DecisionDefer, got %s", d.Kind)
+	}
+	if d.Stage != "dampener" {
+		t.Fatalf("expected stage=dampener, got %q", d.Stage)
+	}
+	if want := 7 * time.Second; d.RetryAfter != want {
+		t.Fatalf("RetryAfter = %s, want %s", d.RetryAfter, want)
+	}
+	if !strings.Contains(d.Reason, "cooldown_active") {
+		t.Fatalf("reason must include cooldown_active, got %q", d.Reason)
+	}
+}
+
+func TestSubmitDampenerHysteresisRejects(t *testing.T) {
+	t.Parallel()
+
+	dr := NewDampenerRegistry()
+	dr.SetRateLimit(IntDampener{Hysteresis: 50})
+
+	t0 := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	dr.RecordApplied(Proposal{Kind: KindRateLimit, Target: "/api/users", Value: 100}, t0)
+
+	e := New(WithDampener(dr))
+	e.now = func() time.Time { return t0.Add(time.Hour) }
+
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Target: "/api/users", Agent: "x", Value: 102,
+	})
+	if d.Kind != DecisionReject {
+		t.Fatalf("hysteresis must produce DecisionReject, got %s", d.Kind)
+	}
+	if d.Stage != "dampener" {
+		t.Fatalf("expected stage=dampener, got %q", d.Stage)
+	}
+	if d.RetryAfter != 0 {
+		t.Fatalf("hysteresis decision must not set RetryAfter, got %s", d.RetryAfter)
+	}
+	if !strings.Contains(d.Reason, "below_hysteresis") {
+		t.Fatalf("reason must include below_hysteresis, got %q", d.Reason)
+	}
+}
+
+func TestSubmitFallsThroughWhenDampenerPasses(t *testing.T) {
+	t.Parallel()
+
+	dr := NewDampenerRegistry()
+	dr.SetRateLimit(IntDampener{Cooldown: time.Second, Hysteresis: 10})
+
+	// No prior RecordApplied, so the first proposal for this key passes
+	// the dampener and falls through to the fallback rejection.
+	e := New(WithConstraints(DefaultConstraints()), WithBounds(NewBoundsRegistry()), WithDampener(dr))
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Target: "/api/users", Agent: "x", Value: 100,
+	})
+	if d.Kind != DecisionReject {
+		t.Fatalf("expected reject (pipeline still incomplete), got %s", d.Kind)
+	}
+	if d.Stage != "fallback" {
+		t.Fatalf("a passing dampener must let the proposal reach fallback; got stage=%q", d.Stage)
+	}
+}
+
+func TestSubmitBoundsFailureSkipsDampener(t *testing.T) {
+	t.Parallel()
+
+	br := NewBoundsRegistry()
+	br.SetRateLimit(IntRange(10, 100))
+
+	dr := NewDampenerRegistry()
+	dr.SetRateLimit(IntDampener{Cooldown: time.Hour})
+	t0 := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	dr.RecordApplied(Proposal{Kind: KindRateLimit, Target: "/api/users", Value: 50}, t0)
+
+	e := New(WithBounds(br), WithDampener(dr))
+	e.now = func() time.Time { return t0.Add(time.Second) }
+
+	// Value 500 is above the bound AND would be in cooldown. Bounds
+	// must short-circuit; the dampener stage must not be visible.
+	d := e.Submit(context.Background(), Proposal{
+		Kind: KindRateLimit, Target: "/api/users", Agent: "x", Value: 500,
+	})
+	if d.Stage != "bounds" {
+		t.Fatalf("bounds failure must short-circuit dampener; got stage=%q", d.Stage)
+	}
+	if strings.Contains(d.Reason, "cooldown") {
+		t.Fatalf("bounds stage must not surface a dampener reason, got %q", d.Reason)
+	}
+}
+
+func TestSubmitDampenerRunsAfterContextCheck(t *testing.T) {
+	t.Parallel()
+
+	dr := NewDampenerRegistry()
+	dr.SetRateLimit(IntDampener{Cooldown: time.Hour})
+	t0 := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	dr.RecordApplied(Proposal{Kind: KindRateLimit, Target: "/api/users", Value: 100}, t0)
+
+	e := New(WithDampener(dr))
+	e.now = func() time.Time { return t0.Add(time.Second) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	d := e.Submit(ctx, Proposal{
+		Kind: KindRateLimit, Target: "/api/users", Agent: "x", Value: 200,
+	})
+	if d.Kind != DecisionDefer || d.Stage != "intake" {
+		t.Fatalf("cancelled context must defer at intake; got kind=%s stage=%q", d.Kind, d.Stage)
+	}
+}
