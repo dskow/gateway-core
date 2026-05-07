@@ -24,6 +24,18 @@
 //     with a precise RetryAfter, while a hysteresis short-circuit produces
 //     DecisionReject because the agent must observe a larger change before
 //     resubmitting.
+//   - The shadow-simulator stage: a per-Kind opt-in ShadowRegistry that
+//     hands enabled proposals to a Simulator, which replays a window of
+//     captured traffic against the proposed configuration in a sandbox
+//     and returns a structured ShadowVerdict. Runs after the dampener
+//     under a hard per-evaluation timeout. A regression short-circuits
+//     with stage "shadow" and DecisionReject; a timeout short-circuits
+//     with stage "shadow" and DecisionDefer (RetryAfter = timeout); a
+//     simulator-internal error short-circuits with stage "shadow" and
+//     DecisionReject so a buggy simulator never silently green-lights
+//     a proposal. The package ships a NoopSimulator and a DefaultSLOScorer
+//     so the stage has a usable autonomous-safe default before a real
+//     replay engine exists.
 //
 // The package's contract is therefore:
 //
@@ -49,6 +61,11 @@
 //     until something has been recorded as applied — until the apply path
 //     exists in the deterministic core, the dampener is a pass-through
 //     for proposals submitted through Submit.
+//   - An Envelope built with WithShadow runs the simulator only for
+//     opted-in Kinds, under a hard per-evaluation timeout. The data
+//     path is unaffected: simulators are read-only, and a missing or
+//     not-yet-built simulator (NoopSimulator) is the autonomous-safe
+//     default for the stage.
 //   - No exported function in this package may block on, depend on, or
 //     mutate the data path.
 package envelope
