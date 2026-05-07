@@ -14,7 +14,7 @@ production-ready manifests.
 
 ---
 
-## 1. TL;DR
+## 1. Summary
 
 For the deterministic side of `gateway-core` — JWT / OIDC auth, rate
 limiting, reverse proxy with health checks, circuit breakers, hot
