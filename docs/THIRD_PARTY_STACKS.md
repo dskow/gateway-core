@@ -130,6 +130,26 @@ curl -X PUT http://127.0.0.1:9180/apisix/admin/routes/users \
   }'
 ```
 
+```mermaid
+flowchart LR
+    Client([Client traffic])
+    Operator([Operator])
+
+    subgraph stack_a["Stack A — APISIX"]
+        APISIX["APISIX<br/>9080 / 9443<br/>data plane"]
+        Admin["APISIX admin API<br/>9180"]
+        Etcd[("etcd<br/>2379")]
+    end
+
+    Backend["Upstream services"]
+
+    Client -->|HTTPS| APISIX
+    Operator -->|curl| Admin
+    Admin -->|writes routes & plugins| Etcd
+    Etcd -.->|watch| APISIX
+    APISIX -->|HTTP / gRPC| Backend
+```
+
 | What you get out of the box                                   | What you do not |
 |---------------------------------------------------------------|-----------------|
 | JWT, rate limit, circuit breaker, hot reload, TLS, admin API, Prom metrics, OTel tracing, mTLS | Adaptive concurrency control; `gateway-core`'s composed circuit-breaker family; the Agentic Envelope; gateway-core's specific structured-error format |
@@ -220,6 +240,31 @@ clusters:
       max_ejection_percent: 50
 ```
 
+```mermaid
+flowchart LR
+    Client([Client traffic])
+    Operator([Operator])
+    IdP([External IdP])
+
+    subgraph stack_b["Stack B — Envoy + adjuncts"]
+        Envoy["Envoy<br/>10000<br/>data plane"]
+        EnvoyAdmin["Envoy admin<br/>9901"]
+        RateLimit["lyft/ratelimit<br/>gRPC"]
+        Redis[("Redis")]
+        ExtAuthz["ext_authz service<br/>oauth2-proxy / OPA"]
+    end
+
+    Backend["Upstream clusters"]
+
+    Client -->|HTTPS| Envoy
+    Operator -->|HTTP| EnvoyAdmin
+    Envoy -->|ext_authz gRPC| ExtAuthz
+    Envoy -->|ratelimit gRPC| RateLimit
+    RateLimit --> Redis
+    ExtAuthz -->|OIDC| IdP
+    Envoy -->|HTTP / gRPC| Backend
+```
+
 | What you get                                                   | What you do not |
 |----------------------------------------------------------------|-----------------|
 | All Stack-A capabilities **plus** adaptive concurrency, mature outlier detection, gRPC support, and a real `shadow_router` for traffic mirroring | The Agentic Envelope's structured *gating* of config changes — `shadow_router` mirrors traffic but does not score SLOs or veto changes |
@@ -282,6 +327,29 @@ services:
       traefik.http.middlewares.users-cb.circuitbreaker.expression: "NetworkErrorRatio() > 0.30"
 ```
 
+```mermaid
+flowchart LR
+    Client([Client traffic])
+    Operator([Operator])
+    IdP([External IdP])
+
+    subgraph stack_c["Stack C — Traefik + forward-auth"]
+        Traefik["Traefik<br/>80 / 443<br/>data plane"]
+        Dashboard["Traefik dashboard<br/>8080"]
+        ForwardAuth["forward-auth<br/>4181"]
+        DockerSock["docker.sock<br/>read-only mount"]
+    end
+
+    Backend["Labelled containers<br/>discovered via Docker labels"]
+
+    Client -->|HTTPS| Traefik
+    Operator -->|HTTPS| Dashboard
+    Traefik -->|forwardAuth middleware| ForwardAuth
+    ForwardAuth -->|OIDC| IdP
+    DockerSock -.->|label discovery| Traefik
+    Traefik -->|HTTP| Backend
+```
+
 | What you get                                                   | What you do not |
 |----------------------------------------------------------------|-----------------|
 | Reverse proxy with auto-TLS, JWT/OIDC via forward-auth, basic rate limit, basic circuit breaker, dashboard, Prom metrics, OTel | Adaptive concurrency; outlier detection at the cluster level; the Agentic Envelope; structured error format |
@@ -338,6 +406,25 @@ services:
             config: { minute: 100, policy: local }
           - name: response-ratelimiting
           - name: prometheus
+```
+
+```mermaid
+flowchart LR
+    Client([Client traffic])
+    Operator([Operator])
+
+    subgraph stack_d["Stack D — Kong DB-less"]
+        Kong["Kong<br/>8000 / 8443<br/>data plane"]
+        KongAdmin["Kong admin API<br/>8001"]
+        ConfigFile["kong.yml<br/>declarative file"]
+    end
+
+    Backend["Upstream services"]
+
+    Client -->|HTTPS| Kong
+    Operator -->|HTTP| KongAdmin
+    ConfigFile -.->|loaded at boot / SIGHUP| Kong
+    Kong -->|HTTP / gRPC| Backend
 ```
 
 | What you get                                                   | What you do not |
@@ -449,6 +536,39 @@ xDS for Envoy. The Envelope's autonomous-safe inversion is preserved
 (the gateway runs whether the sidecar is up or not), and you get
 the best of both: the off-the-shelf gateway's plugin catalogue, and
 the Envelope's structured gating of agent-driven changes.
+
+```mermaid
+flowchart LR
+    Client([Client traffic])
+    Signal([Signal source<br/>metrics / anomaly / schedule])
+
+    subgraph sidecar["gateway-core sidecar (Envelope host)"]
+        Pipeline["Pipeline<br/>Planner → Verifier → Safety → Observer"]
+        Envelope["Envelope<br/>Constraints → Bounds → Dampener → Shadow"]
+        Writer["Config writer"]
+    end
+
+    subgraph dataplane["Off-the-shelf data plane"]
+        Gateway["Envoy / APISIX / Kong / Traefik"]
+        ConfigStore[("etcd / xDS / Admin API")]
+    end
+
+    Backend["Upstream services"]
+
+    Signal -->|trigger| Pipeline
+    Pipeline -->|Proposal| Envelope
+    Envelope -->|Apply only| Writer
+    Writer -.->|writes config| ConfigStore
+    ConfigStore -.->|watches| Gateway
+    Client -->|HTTPS| Gateway
+    Gateway -->|HTTP / gRPC| Backend
+```
+
+The dotted edges are the only path between the agent layer and the
+data plane: the sidecar writes config, the gateway watches it, no
+runtime call from the data path ever reaches the sidecar. If the
+sidecar is killed the gateway keeps serving on whatever
+configuration was last applied.
 
 This is the configuration the project's Q4 roadmap is building
 toward; see [`API_GATEWAY_MAIN_PLAN_2030.md`](API_GATEWAY_MAIN_PLAN_2030.md).
