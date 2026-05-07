@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # actions/setup-go@v6 transitively pins an older actions/cache that ships
+  # Node.js 20 (deprecated; removed from runners 2026-09-16). Opt into Node 24
+  # for JavaScript actions until that transitive dep is bumped upstream.
+  # https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
