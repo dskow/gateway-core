@@ -215,34 +215,34 @@ type PipelineOutcome struct {
 	// / context.DeadlineExceeded if you care about the failure mode.
 	Err error
 
-	// DisabledUntil is meaningful only on OutcomeDisabled produced by
-	// an exhausted error budget; it is the wall-clock time the
-	// pipeline expects to allow Run to proceed again. Zero if the
-	// disable property is operator-driven (no automatic recovery).
-	DisabledUntil time.Time
+	// EnabledFrom is meaningful only on OutcomeDisabled produced by an
+	// exhausted error budget; it is the wall-clock time the pipeline
+	// will allow Run to proceed again. Zero means the pipeline is
+	// already enabled, or that the disable is operator-driven (no
+	// automatic recovery — only Enable clears it).
+	EnabledFrom time.Time
 
 	// DecidedAt is the time the pipeline produced this outcome.
 	DecidedAt time.Time
 }
 
 // ErrorBudget controls when the pipeline self-disables after a streak
-// of agent errors. The zero value disables the budget entirely:
-// errors are surfaced but the pipeline never disables itself.
+// of agent errors. The zero value turns the budget off: errors are
+// surfaced but the pipeline stays enabled regardless.
 //
 // The budget is intentionally simple — consecutive failures plus a
 // fixed cooldown. A more sophisticated budget (rolling window,
 // per-agent counts, exponential backoff) is a future extension.
 type ErrorBudget struct {
 	// MaxConsecutiveErrors is the number of consecutive OutcomeError
-	// runs that triggers a disable property. Zero or negative disables the
-	// budget.
+	// runs that trips the budget. Zero or negative leaves the pipeline
+	// always enabled.
 	MaxConsecutiveErrors int
 
 	// Cooldown is how long the pipeline stays disabled after the
-	// budget is exhausted. The next Run after Cooldown elapses runs
+	// budget is tripped. The next Run after Cooldown elapses runs
 	// agents again; a successful run resets the consecutive counter.
-	// Zero means "stay disabled forever" — the operator must
-	// explicitly call Resume.
+	// Zero means "stay disabled until Enable is called explicitly".
 	Cooldown time.Duration
 }
 
@@ -256,10 +256,10 @@ func DefaultErrorBudget() ErrorBudget {
 }
 
 // Pipeline runs a Planner followed by zero or more Reviewers in
-// non-decreasing Role order, enforces an error budget, and exposes a
-// manual operator disable. It is the canonical implementation of the
-// "linear, ordered agent pipeline" element of the pattern (§11.5 of
-// AGENTIC_ENVELOPE.md).
+// non-decreasing Role order, enforces an error budget, and exposes
+// Enable / Disable for operator override. It is the canonical
+// implementation of the "linear, ordered agent pipeline" element of
+// the pattern (§11.5 of AGENTIC_ENVELOPE.md).
 //
 // Pipeline is safe for concurrent use, but a single Run executes all
 // of its agents sequentially — concurrent Run calls run independent
@@ -274,8 +274,8 @@ type Pipeline struct {
 
 	mu                sync.Mutex
 	consecutiveErrors int
-	disabledUntil     time.Time // zero means not auto-disabled
-	manualDisable     bool
+	enabledFrom       time.Time // zero means already enabled (no pending cooldown)
+	enabled           bool      // operator flag; set true at construction
 }
 
 // PipelineOption configures a Pipeline at construction time.
@@ -328,6 +328,7 @@ func NewPipeline(planner Planner, reviewers []Reviewer, opts ...PipelineOption) 
 		planner:   planner,
 		reviewers: append([]Reviewer(nil), reviewers...),
 		now:       time.Now,
+		enabled:   true,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -337,51 +338,53 @@ func NewPipeline(planner Planner, reviewers []Reviewer, opts ...PipelineOption) 
 	return p, nil
 }
 
-// Disable sets the operator manual-disable flag. While the flag is
-// set every Run returns OutcomeDisabled regardless of error-budget
-// state. Use Resume to clear it.
+// Disable clears the operator-enabled flag. While the flag is clear,
+// every Run returns OutcomeDisabled regardless of error-budget state.
+// Use Enable to set the flag again.
 func (p *Pipeline) Disable() {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.manualDisable = true
+	p.enabled = false
 }
 
-// Resume clears both the operator manual-disable flag and the
-// error-budget cooldown. The next Run runs agents again. Resume on a
-// pipeline that is not disabled is a safe no-op.
-func (p *Pipeline) Resume() {
+// Enable sets the operator-enabled flag and clears any pending
+// error-budget cooldown. The next Run runs agents again. Enable on
+// a pipeline that is already enabled is a safe no-op.
+func (p *Pipeline) Enable() {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.manualDisable = false
+	p.enabled = true
 	p.consecutiveErrors = 0
-	p.disabledUntil = time.Time{}
+	p.enabledFrom = time.Time{}
 }
 
-// Disabled reports whether the next Run would short-circuit to
-// OutcomeDisabled. Useful for sidecar metrics and tests.
-func (p *Pipeline) Disabled() bool {
+// Enabled reports whether the next Run would actually run agents.
+// Returns false when the operator has called Disable, when an
+// exhausted error budget is still in cooldown, or on a nil receiver.
+// Useful for sidecar metrics and tests.
+func (p *Pipeline) Enabled() bool {
 	if p == nil {
-		return true
+		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.isDisabledLocked(p.timeNow())
+	return p.isEnabledLocked(p.timeNow())
 }
 
-func (p *Pipeline) isDisabledLocked(now time.Time) bool {
-	if p.manualDisable {
-		return true
-	}
-	if p.disabledUntil.IsZero() {
+func (p *Pipeline) isEnabledLocked(now time.Time) bool {
+	if !p.enabled {
 		return false
 	}
-	return now.Before(p.disabledUntil)
+	if p.enabledFrom.IsZero() {
+		return true
+	}
+	return !now.Before(p.enabledFrom)
 }
 
 // Run executes one cycle of the pipeline. The order is:
@@ -415,20 +418,20 @@ func (p *Pipeline) Run(ctx context.Context) PipelineOutcome {
 	}
 
 	p.mu.Lock()
-	disabled := p.isDisabledLocked(now)
-	disabledUntil := p.disabledUntil
-	manual := p.manualDisable
+	enabled := p.isEnabledLocked(now)
+	enabledFrom := p.enabledFrom
+	manuallyEnabled := p.enabled
 	p.mu.Unlock()
-	if disabled {
+	if !enabled {
 		reason := "error_budget_exhausted"
-		if manual {
+		if !manuallyEnabled {
 			reason = "operator_disabled"
 		}
 		return PipelineOutcome{
-			Kind:          OutcomeDisabled,
-			Reason:        reason,
-			DisabledUntil: disabledUntil,
-			DecidedAt:     now,
+			Kind:        OutcomeDisabled,
+			Reason:      reason,
+			EnabledFrom: enabledFrom,
+			DecidedAt:   now,
 		}
 	}
 
@@ -504,23 +507,23 @@ func (p *Pipeline) Run(ctx context.Context) PipelineOutcome {
 }
 
 // recordError accumulates an error against the budget and, if the
-// budget is exhausted, sets DisabledUntil on the returned outcome.
+// budget is exhausted, sets EnabledFrom on the returned outcome.
 // The returned outcome is the one to return from Run; recordError
-// rewrites only DisabledUntil when relevant.
+// rewrites only EnabledFrom when relevant.
 func (p *Pipeline) recordError(out PipelineOutcome, now time.Time) PipelineOutcome {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.consecutiveErrors++
 	if p.budget.MaxConsecutiveErrors > 0 && p.consecutiveErrors >= p.budget.MaxConsecutiveErrors {
 		if p.budget.Cooldown > 0 {
-			p.disabledUntil = now.Add(p.budget.Cooldown)
+			p.enabledFrom = now.Add(p.budget.Cooldown)
 		} else {
-			// Zero cooldown means stay disabled until Resume.
-			// time.Time{}.IsZero is reserved to mean "not auto-disabled",
+			// Zero cooldown means stay disabled until Enable is called.
+			// time.Time{}.IsZero is reserved to mean "already enabled",
 			// so we use the far-future sentinel time.Unix(1<<62, 0).
-			p.disabledUntil = farFuture
+			p.enabledFrom = farFuture
 		}
-		out.DisabledUntil = p.disabledUntil
+		out.EnabledFrom = p.enabledFrom
 	}
 	return out
 }
@@ -542,8 +545,8 @@ func (p *Pipeline) timeNow() time.Time {
 	return p.now()
 }
 
-// farFuture is the disabledUntil sentinel for "stay disabled until
-// the operator calls Resume". It is far enough in the future that
+// farFuture is the enabledFrom sentinel for "stay disabled until
+// the operator calls Enable". It is far enough in the future that
 // time.Now().Before(farFuture) is true for any plausible runtime.
 var farFuture = time.Unix(1<<62, 0)
 

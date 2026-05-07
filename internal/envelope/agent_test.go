@@ -377,11 +377,11 @@ func TestPipelineErrorBudgetDisablesAfterStreak(t *testing.T) {
 	if out.Kind != OutcomeError {
 		t.Fatalf("first run: expected OutcomeError, got %s", out.Kind)
 	}
-	if !out.DisabledUntil.IsZero() {
+	if !out.EnabledFrom.IsZero() {
 		t.Fatal("first failure must not disable yet")
 	}
-	if pl.Disabled() {
-		t.Fatal("pipeline must not be disabled after one failure")
+	if !pl.Enabled() {
+		t.Fatal("pipeline must remain enabled after one failure")
 	}
 
 	// Second failure — exhausts the budget.
@@ -389,15 +389,15 @@ func TestPipelineErrorBudgetDisablesAfterStreak(t *testing.T) {
 	if out.Kind != OutcomeError {
 		t.Fatalf("second run: expected OutcomeError, got %s", out.Kind)
 	}
-	wantUntil := t0.Add(time.Minute)
-	if !out.DisabledUntil.Equal(wantUntil) {
-		t.Fatalf("DisabledUntil = %v, want %v", out.DisabledUntil, wantUntil)
+	wantFrom := t0.Add(time.Minute)
+	if !out.EnabledFrom.Equal(wantFrom) {
+		t.Fatalf("EnabledFrom = %v, want %v", out.EnabledFrom, wantFrom)
 	}
-	if !pl.Disabled() {
-		t.Fatal("pipeline must be disabled after exhausting the budget")
+	if pl.Enabled() {
+		t.Fatal("pipeline must not be enabled after exhausting the budget")
 	}
 
-	// Third call inside cooldown — must short-circuit to disabled property.
+	// Third call inside cooldown — must short-circuit to OutcomeDisabled.
 	out = pl.Run(context.Background())
 	if out.Kind != OutcomeDisabled {
 		t.Fatalf("inside cooldown: expected OutcomeDisabled, got %s", out.Kind)
@@ -435,13 +435,13 @@ func TestPipelineErrorBudgetClearsAfterCooldown(t *testing.T) {
 	if out := pl.Run(context.Background()); out.Kind != OutcomeError {
 		t.Fatalf("first run: expected error, got %s", out.Kind)
 	}
-	if !pl.Disabled() {
-		t.Fatal("pipeline must be disabled after one error with budget=1")
+	if pl.Enabled() {
+		t.Fatal("pipeline must not be enabled after one error with budget=1")
 	}
 
 	// Advance the clock past the cooldown.
 	clock = t0.Add(50 * time.Millisecond)
-	if pl.Disabled() {
+	if !pl.Enabled() {
 		t.Fatal("pipeline must auto-recover after cooldown elapses")
 	}
 	out := pl.Run(context.Background())
@@ -476,7 +476,7 @@ func TestPipelineSuccessfulRunResetsErrorStreak(t *testing.T) {
 	// so the budget must never trip.
 	for i := 0; i < 4; i++ {
 		_ = pl.Run(context.Background())
-		if pl.Disabled() {
+		if !pl.Enabled() {
 			t.Fatalf("pipeline disabled after iteration %d; alternating success must reset the streak", i)
 		}
 	}
@@ -510,28 +510,28 @@ func TestPipelineManualDisable(t *testing.T) {
 		t.Fatal("planner must not run while operator-disabled")
 	}
 
-	pl.Resume()
-	if pl.Disabled() {
-		t.Fatal("Resume must clear manual disable")
+	pl.Enable()
+	if !pl.Enabled() {
+		t.Fatal("Enable must clear manual disable")
 	}
 	if out := pl.Run(context.Background()); out.Kind != OutcomeNoProposal {
-		t.Fatalf("expected OutcomeNoProposal after resume, got %s", out.Kind)
+		t.Fatalf("expected OutcomeNoProposal after Enable, got %s", out.Kind)
 	}
 }
 
-func TestPipelineNilReceiverIsDisabled(t *testing.T) {
+func TestPipelineNilReceiverIsNotEnabled(t *testing.T) {
 	t.Parallel()
 
 	var pl *Pipeline
-	if !pl.Disabled() {
-		t.Fatal("nil pipeline must report Disabled")
+	if pl.Enabled() {
+		t.Fatal("nil pipeline must report not enabled")
 	}
 	out := pl.Run(context.Background())
 	if out.Kind != OutcomeDisabled {
 		t.Fatalf("nil pipeline must produce OutcomeDisabled, got %s", out.Kind)
 	}
 	pl.Disable()
-	pl.Resume()
+	pl.Enable()
 }
 
 func TestPlannerFunc_NilFnReturnsNoProposal(t *testing.T) {
@@ -621,7 +621,7 @@ func TestDefaultErrorBudget(t *testing.T) {
 	}
 }
 
-func TestPipelineZeroCooldownStaysDisabledUntilResume(t *testing.T) {
+func TestPipelineZeroCooldownStaysDisabledUntilEnable(t *testing.T) {
 	t.Parallel()
 
 	planner := PlannerFunc{
@@ -630,7 +630,7 @@ func TestPipelineZeroCooldownStaysDisabledUntilResume(t *testing.T) {
 	}
 	pl, err := NewPipeline(planner, nil, WithErrorBudget(ErrorBudget{
 		MaxConsecutiveErrors: 1,
-		Cooldown:             0, // means "stay disabled forever"
+		Cooldown:             0, // means "stay disabled until Enable is called"
 	}))
 	if err != nil {
 		t.Fatalf("NewPipeline: %v", err)
@@ -639,17 +639,17 @@ func TestPipelineZeroCooldownStaysDisabledUntilResume(t *testing.T) {
 	if out := pl.Run(context.Background()); out.Kind != OutcomeError {
 		t.Fatalf("first run: expected error, got %s", out.Kind)
 	}
-	if !pl.Disabled() {
-		t.Fatal("pipeline must be disabled after exhausting a zero-cooldown budget")
+	if pl.Enabled() {
+		t.Fatal("pipeline must not be enabled after exhausting a zero-cooldown budget")
 	}
 
-	// Advancing the clock by a year is irrelevant — only Resume clears it.
+	// Advancing the clock by a year is irrelevant — only Enable clears it.
 	pl.now = func() time.Time { return time.Now().Add(365 * 24 * time.Hour) }
-	if !pl.Disabled() {
+	if pl.Enabled() {
 		t.Fatal("zero-cooldown disable must not auto-recover")
 	}
-	pl.Resume()
-	if pl.Disabled() {
-		t.Fatal("Resume must clear a zero-cooldown disable")
+	pl.Enable()
+	if !pl.Enabled() {
+		t.Fatal("Enable must clear a zero-cooldown disable")
 	}
 }

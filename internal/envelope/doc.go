@@ -42,9 +42,10 @@
 //     proposals; each Reviewer can veto with a structured reason, and
 //     the first vetoing reviewer short-circuits the rest. The Pipeline
 //     enforces an ErrorBudget that auto-disables the producer side after
-//     a streak of agent failures, and exposes Disable / Resume for
-//     operator override. The Pipeline is the *only* path into the
-//     Envelope from agents, but the Envelope itself runs identically
+//     a streak of agent failures, and exposes Disable / Enable for
+//     operator override (with Enabled reporting whether the next Run
+//     would actually run agents). The Pipeline is the *only* path into
+//     the Envelope from agents, but the Envelope itself runs identically
 //     whether a Pipeline is wired up or not — proposals from any source
 //     enter through Envelope.Submit.
 //
